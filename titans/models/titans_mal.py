@@ -1,9 +1,8 @@
-from src.attention import SlidingWindowAttention
-from titans_base import TitansBase
+from titans.models.titans_base import TitansBase
 import torch
 import torch.nn as nn
-
-class TitansMAG(TitansBase):
+from titans.utils.attention import SlidingWindowAttention
+class TitansMAL(TitansBase):
     def __init__(
         self,
         d_model: int,
@@ -54,9 +53,7 @@ class TitansMAG(TitansBase):
             for _ in range(n_layers)
         ])
         
-        self.gate_norm1 = nn.LayerNorm(d_model)
-        self.gate_norm2 = nn.LayerNorm(d_model)
-        self.gate_proj = nn.Linear(d_model * 2, d_model)
+        self.memory_norm = nn.LayerNorm(d_model)
         
         self.output_projection = nn.Linear(d_model, d_model)
         
@@ -65,35 +62,26 @@ class TitansMAG(TitansBase):
         x: torch.Tensor,
         is_training: bool = True,
     ) -> torch.Tensor:
-        batch_size = x.size(0)
-        
         x_with_persistent = self.persistent_memory.prepend_to_sequence(x)
         
-        core_output = x_with_persistent
+        memory_output, _ = self.neural_memory(x_with_persistent, is_training=is_training)
+        memory_output = self.memory_norm(memory_output)
+        
+        output = memory_output
         for i in range(self.n_layers):
-            residual = core_output
-            core_output = self.layer_norms1[i](core_output)
-            core_output = self.attention_layers[i](core_output)
-            core_output = self.dropout(core_output)
-            core_output = residual + core_output
+            residual = output
+            output = self.layer_norms1[i](output)
+            output = self.attention_layers[i](output)
+            output = self.dropout(output)
+            output = residual + output
             
-            residual = core_output
-            core_output = self.layer_norms2[i](core_output)
-            core_output = self.ffns[i](core_output)
-            core_output = residual + core_output
+            residual = output
+            output = self.layer_norms2[i](output)
+            output = self.ffns[i](output)
+            output = residual + output
         
-        core_output = core_output[:, self.persistent_tokens:, :]
-        
-        memory_output, _ = self.neural_memory(x, is_training=is_training)
-        
-        core_output_norm = self.gate_norm1(core_output)
-        memory_output_norm = self.gate_norm2(memory_output)
-        
-        gate_input = torch.cat([core_output_norm, memory_output_norm], dim=-1)
-        gate = torch.sigmoid(self.gate_proj(gate_input))
-        
-        output = gate * core_output + (1 - gate) * memory_output
+        output = output[:, self.persistent_tokens:, :]
         
         output = self.output_projection(output)
         
-        return output
+        return output 

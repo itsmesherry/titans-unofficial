@@ -2,8 +2,8 @@ from typing import Optional
 
 import torch.nn as nn
 
-from src.memory import NeuralMemoryModule
-from src.memory import PersistentMemory
+from titans.utils.memory import NeuralMemoryModule
+from titans.utils.memory import PersistentMemory
 
 class TitansBase(nn.Module):
     def __init__(

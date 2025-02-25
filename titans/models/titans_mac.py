@@ -3,8 +3,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from titans_base import TitansBase
-from src.memory import CausalSelfAttention
+from titans.models.titans_base import TitansBase
+from titans.utils.memory import CausalSelfAttention
 
 class TitansMAC(TitansBase):
     def __init__(
