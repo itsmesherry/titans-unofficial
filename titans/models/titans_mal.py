@@ -1,7 +1,10 @@
-from titans.models.titans_base import TitansBase
 import torch
 import torch.nn as nn
+
+from titans.models.titans_base import TitansBase
 from titans.utils.attention import SlidingWindowAttention
+
+
 class TitansMAL(TitansBase):
     def __init__(
         self,
@@ -85,3 +88,4 @@ class TitansMAL(TitansBase):
         output = self.output_projection(output)
         
         return output 
+    

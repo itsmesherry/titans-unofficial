@@ -1,10 +1,10 @@
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
+from typing import Optional
+
 from titans.models.titans_base import TitansBase
-from titans.utils.memory import CausalSelfAttention
+from titans.utils.attention import CausalSelfAttention
 
 class TitansMAC(TitansBase):
     def __init__(
@@ -105,3 +105,4 @@ class TitansMAC(TitansBase):
         output = self.output_projection(output)
         
         return output
+    
