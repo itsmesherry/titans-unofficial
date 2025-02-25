@@ -18,9 +18,9 @@ class PersistentMemory(nn.Module):
         nn.init.normal_(self.memory_tokens, mean=0.0, std=0.02)
         
     def forward(self, batch_size: int) -> torch.Tensor:
-        return self.memory_tokens.expand(batch_size, -1)
+        return self.memory_tokens.expand(batch_size, -1, -1)
     
     def prepend_to_sequence(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = x.size(1)
+        batch_size = x.size(0)
         memory_tokens = self.forward(batch_size)
-        return torch.cat([memory_tokens, x]) 
+        return torch.cat([memory_tokens, x], dim=1) 
