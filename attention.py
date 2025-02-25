@@ -86,3 +86,57 @@ class MultiHeadAttention(nn.Module):
             mask[i, start:end] = True
             
         return mask
+    
+class SlidingWindowAttention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        window_size: int,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        
+        self.attention = MultiHeadAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            window_size=window_size,
+            dropout=dropout,
+        )
+        
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        return self.attention(x, x, x, mask)
+
+class CausalSelfAttention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        window_size: Optional[int] = None,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        
+        self.attention = MultiHeadAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            window_size=window_size,
+            dropout=dropout,
+        )
+        
+    def forward(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        seq_len = x.size(1)
+        
+        # Create causal mask
+        causal_mask = torch.tril(
+            torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+        )
+        
+        return self.attention(x, x, x, causal_mask) 
