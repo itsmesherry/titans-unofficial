@@ -25,13 +25,7 @@ jobs:
     
     - name: Run tests
       run: |
-        pytest pytests/ --cov=titans --cov-report=xml
-    
-    - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        fail_ci_if_error: true
+        pytest pytests/ --cov=titans
     
     - name: Build package
       run: python -m build
