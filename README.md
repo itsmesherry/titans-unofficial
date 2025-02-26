@@ -1,6 +1,6 @@
 # Unofficial Implementation of Titans: Learning to Memorize at Test Time
 
-[![PyPI version](https://badge.fury.io/py/titans-unofficial.svg)](https://badge.fury.io/py/titans-unofficial)
+[![PyPI version](https://img.shields.io/pypi/v/titans-unofficial.svg)](https://pypi.org/project/titans-unofficial/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-380/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
