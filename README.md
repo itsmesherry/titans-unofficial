@@ -40,7 +40,7 @@ pip install -e ".[dev]"
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - PyTorch 2.0+
 - transformers (for tokenization)
 - numpy

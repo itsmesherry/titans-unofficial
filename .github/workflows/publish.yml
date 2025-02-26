@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
+
     - name: Set up Python 3.10
       uses: actions/setup-python@v4
       with:
@@ -25,10 +26,13 @@ jobs:
     
     - name: Run tests
       run: |
+        set -e  # Ensure failure stops workflow
         pytest pytests/ --cov=titans
     
     - name: Build package
-      run: python -m build
+      run: |
+        rm -rf dist/*  # Clean old builds
+        python -m build
     
     - name: Publish to Test PyPI
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -39,9 +43,9 @@ jobs:
         twine upload --repository-url https://test.pypi.org/legacy/ dist/*
     
     - name: Publish to PyPI
-      if: github.event_name == 'release' && github.event.action == 'created'
+      if: github.event_name == 'release'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
       run: |
-        twine upload dist/* 
+        twine upload dist/*
