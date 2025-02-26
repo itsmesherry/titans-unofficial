@@ -1,5 +1,9 @@
 # Unofficial Implementation of Titans: Learning to Memorize at Test Time
 
+[![PyPI version](https://badge.fury.io/py/titans-unofficial.svg)](https://badge.fury.io/py/titans-unofficial)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-380/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 This is an unofficial PyTorch implementation of the paper ["Titans: Learning to Memorize at Test Time"](https://arxiv.org/abs/2501.00663) by Ali Behrouz, Peilin Zhong, and Vahab Mirrokni.
 
 ## Overview
@@ -17,13 +21,21 @@ Titans is a novel neural architecture that combines attention-based short-term m
 
 ## Installation
 
+### From PyPI (Recommended)
+
+```bash
+pip install titans-unofficial
+```
+
+### From Source (Development)
+
 ```bash
 # Clone the repository
 git clone https://github.com/Shehryar718/titans-unofficial.git
 cd titans-unofficial
 
-# Install dependencies
-pip install -r requirements.txt
+# Install in development mode with all extras
+pip install -e ".[dev]"
 ```
 
 ## Requirements
