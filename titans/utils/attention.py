@@ -6,7 +6,7 @@ from typing import Optional
 
 class MultiHeadAttention(nn.Module):
     """
-    Multi-head attention with optional sliding window.
+    Multi-head attention with optional sliding window and numerical stability enhancements.
     """
     
     def __init__(
@@ -15,6 +15,7 @@ class MultiHeadAttention(nn.Module):
         n_heads: int,
         window_size: Optional[int] = None,
         dropout: float = 0.1,
+        attention_scale: float = 1.0,
     ):
         """
         Initialize the multi-head attention module.
@@ -24,6 +25,7 @@ class MultiHeadAttention(nn.Module):
             n_heads: Number of attention heads
             window_size: Size of the sliding window (None for full attention)
             dropout: Dropout probability
+            attention_scale: Additional scaling factor for attention scores
         """
         super().__init__()
         
@@ -33,15 +35,24 @@ class MultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_model // n_heads
         self.window_size = window_size
+        self.attention_scale = attention_scale
         
-        # Projection matrices
+        # Projection matrices with Xavier initialization
         self.W_Q = nn.Linear(d_model, d_model, bias=False)
         self.W_K = nn.Linear(d_model, d_model, bias=False)
         self.W_V = nn.Linear(d_model, d_model, bias=False)
         self.W_O = nn.Linear(d_model, d_model, bias=False)
         
-        self.dropout = nn.Dropout(dropout)
+        self._init_weights()
         
+        self.dropout = nn.Dropout(dropout)
+        self.scale = math.sqrt(self.d_head)
+        
+    def _init_weights(self) -> None:
+        """Initialize weights using Xavier uniform initialization."""
+        for module in [self.W_Q, self.W_K, self.W_V, self.W_O]:
+            nn.init.xavier_uniform_(module.weight)
+    
     def forward(
         self,
         q: torch.Tensor,
@@ -50,7 +61,7 @@ class MultiHeadAttention(nn.Module):
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Forward pass through the multi-head attention.
+        Forward pass through the multi-head attention with enhanced numerical stability.
         
         Args:
             q: Query tensor of shape (batch_size, seq_len_q, d_model)
@@ -68,8 +79,15 @@ class MultiHeadAttention(nn.Module):
         k = self.W_K(k).view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         v = self.W_V(v).view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         
-        # Compute attention scores
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_head)
+        # Scale query for numerical stability
+        q = q / self.scale
+        
+        # Compute attention scores with enhanced numerical stability
+        scores = torch.matmul(q, k.transpose(-2, -1))
+        
+        # Apply additional stability measures
+        scores = scores * self.attention_scale
+        scores = scores / scores.abs().max().clamp(min=1)
         
         # Apply sliding window mask if specified
         if self.window_size is not None:
@@ -81,18 +99,23 @@ class MultiHeadAttention(nn.Module):
             else:
                 mask = window_mask
         
-        # Apply mask
+        # Apply mask and scale
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
+            scores = scores.masked_fill(mask == 0, -1e4)  # Use -1e4 instead of -inf for stability
         
-        # Apply softmax and dropout
+        # Apply softmax with numerical stability
         attn_weights = F.softmax(scores, dim=-1)
+        
+        # Apply dropout
         attn_weights = self.dropout(attn_weights)
         
-        # Compute output
+        # Compute output with gradient scaling
         output = torch.matmul(attn_weights, v)
         output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
+        
+        # Final projection with residual scaling
         output = self.W_O(output)
+        output = output / (output.abs().mean().clamp(min=1))
         
         return output
     

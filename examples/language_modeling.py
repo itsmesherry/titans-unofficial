@@ -128,6 +128,8 @@ class TitansForLanguageModeling(nn.Module):
             
             next_token_logits = logits[:, -1, :]
             
+            next_token_logits = torch.clamp(next_token_logits, -100, 100)
+
             if temperature != 1.0:
                 next_token_logits = next_token_logits / temperature
             
@@ -159,7 +161,10 @@ class TitansForLanguageModeling(nn.Module):
             
             if do_sample:
                 probs = F.softmax(next_token_logits, dim=-1)
+                probs = torch.clamp(probs, min=1e-10)
+                probs = probs / probs.sum(dim=-1, keepdim=True)
                 next_token = torch.multinomial(probs, num_samples=1)
+                
             else:
                 next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
             

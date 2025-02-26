@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Union
 
 class NeuralMemoryModule(nn.Module):
     """
@@ -57,8 +57,8 @@ class NeuralMemoryModule(nn.Module):
         # Initialize memory state
         self.reset_memory()
 
-    def reset_memory(self):
-        """Reset the memory state."""
+    def reset_memory(self) -> None:
+        """Reset the memory state and clear any stored gradients."""
         # Initialize memory parameters
         for layer in self.memory_layers:
             nn.init.kaiming_uniform_(layer.weight, a=math.sqrt(5))
@@ -69,6 +69,10 @@ class NeuralMemoryModule(nn.Module):
         
         # Initialize momentum
         self.surprise_momentum = None
+        
+        # Clear CUDA cache if available
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     def memory_forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -101,11 +105,12 @@ class NeuralMemoryModule(nn.Module):
         # Forward pass through memory without weight update
         pred_v = self.memory_forward(k)
         
-        # Compute MSE loss
+        # Compute MSE loss with numerical stability
         loss = F.mse_loss(pred_v, v, reduction='none')
+        loss = loss.clamp(min=1e-10, max=1e10)  # Prevent extreme values
         return loss.mean(dim=-1, keepdim=True)
     
-    def compute_gradient(self, k: torch.Tensor, v: torch.Tensor) -> list:
+    def compute_gradient(self, k: torch.Tensor, v: torch.Tensor) -> List[Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]]:
         """
         Compute the gradient of the loss with respect to the memory parameters.
         
@@ -114,44 +119,56 @@ class NeuralMemoryModule(nn.Module):
             v: Value tensor
             
         Returns:
-            List of gradients for each layer
+            List of (weight_grad, bias_grad) tuples for each layer
         """
         # Enable gradient computation
-        with torch.enable_grad():
-            # Create a copy of the memory layers with requires_grad=True
-            temp_layers = nn.ModuleList()
-            for layer in self.memory_layers:
-                temp_layer = nn.Linear(layer.in_features, layer.out_features, 
-                                      bias=layer.bias is not None)
-                temp_layer.weight.data.copy_(layer.weight.data)
-                if layer.bias is not None:
-                    temp_layer.bias.data.copy_(layer.bias.data)
-                temp_layers.append(temp_layer)
-            
-            # Forward pass through temporary layers
-            x = k.detach().clone()  # Detach input from computation graph
-            activations = []
-            for i, layer in enumerate(temp_layers):
-                if i < self.memory_depth - 1:
-                    x = F.relu(layer(x))
-                else:
-                    x = layer(x)
-                activations.append(x)
-            
-            # Compute loss
-            loss = F.mse_loss(x, v.detach().clone())    # Detach target from computation graph
-            
-            # Compute gradients
-            loss.backward(retain_graph=True)    # Add retain_graph=True
-            
-            # Extract gradients
-            gradients = []
-            for layer in temp_layers:
-                weight_grad = layer.weight.grad.clone() if layer.weight.grad is not None else None
-                bias_grad = layer.bias.grad.clone() if layer.bias is not None and layer.bias.grad is not None else None
-                gradients.append((weight_grad, bias_grad))
+        try:
+            with torch.enable_grad():
+                # Create a copy of the memory layers with requires_grad=True
+                temp_layers = nn.ModuleList()
+                for layer in self.memory_layers:
+                    temp_layer = nn.Linear(layer.in_features, layer.out_features, 
+                                        bias=layer.bias is not None)
+                    temp_layer.weight.data.copy_(layer.weight.data)
+                    if layer.bias is not None:
+                        temp_layer.bias.data.copy_(layer.bias.data)
+                    temp_layers.append(temp_layer)
                 
-        return gradients
+                # Forward pass through temporary layers
+                x = k.detach().clone()  # Detach input from computation graph
+                activations = []
+                for i, layer in enumerate(temp_layers):
+                    if i < self.memory_depth - 1:
+                        x = F.relu(layer(x))
+                    else:
+                        x = layer(x)
+                    activations.append(x)
+                
+                # Compute loss with numerical stability
+                loss = F.mse_loss(x, v.detach().clone())
+                loss = loss.clamp(min=1e-10, max=1e10)
+                
+                # Compute gradients
+                loss.backward()
+                
+                # Extract gradients
+                gradients = []
+                for layer in temp_layers:
+                    weight_grad = layer.weight.grad.clone() if layer.weight.grad is not None else None
+                    bias_grad = layer.bias.grad.clone() if layer.bias is not None and layer.bias.grad is not None else None
+                    gradients.append((weight_grad, bias_grad))
+                
+                # Clean up
+                del temp_layers
+                del activations
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    
+                return gradients
+                
+        except Exception as e:
+            print(f"Error in gradient computation: {e}")
+            return [(None, None) for _ in range(len(self.memory_layers))]
     
     def update_memory(
         self, 

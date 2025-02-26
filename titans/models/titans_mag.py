@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 
 from titans.models.titans_base import TitansBase
 from titans.utils.attention import SlidingWindowAttention
@@ -66,24 +67,48 @@ class TitansMAG(TitansBase):
             for _ in range(n_layers)
         ])
         
-        # Feed-forward networks
+        # Feed-forward networks with improved initialization
         self.ffns = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(d_model, 4 * d_model),
-                nn.GELU(),
-                nn.Linear(4 * d_model, d_model),
-                nn.Dropout(dropout),
-            )
+            self._create_ffn()
             for _ in range(n_layers)
         ])
         
-        # Gate mechanism
+        # Gate mechanism with improved architecture
         self.gate_norm1 = nn.LayerNorm(d_model)
         self.gate_norm2 = nn.LayerNorm(d_model)
-        self.gate_proj = nn.Linear(d_model * 2, d_model)
+        self.gate_proj = nn.Sequential(
+            nn.Linear(d_model * 2, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+            nn.Dropout(dropout),
+        )
         
         # Output projection
         self.output_projection = nn.Linear(d_model, d_model)
+        
+        # Initialize all weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module: nn.Module) -> None:
+        """Initialize weights with improved scaling."""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+            
+    def _create_ffn(self) -> nn.Sequential:
+        """Create a feed-forward network with improved architecture."""
+        dropout_prob = self.dropout.p if isinstance(self.dropout, nn.Dropout) else self.dropout
+        return nn.Sequential(
+            nn.Linear(self.d_model, 4 * self.d_model),
+            nn.GELU(),
+            nn.Dropout(dropout_prob),
+            nn.Linear(4 * self.d_model, self.d_model),
+            nn.Dropout(dropout_prob),
+        )
         
     def forward(
         self,
@@ -108,12 +133,13 @@ class TitansMAG(TitansBase):
         # Process through attention layers (core branch)
         core_output = x_with_persistent
         for i in range(self.n_layers):
+            # Self-attention with residual connection and layer norm
             residual = core_output
             core_output = self.layer_norms1[i](core_output)
             core_output = self.attention_layers[i](core_output)
-            core_output = self.dropout(core_output)
-            core_output = residual + core_output
+            core_output = residual + self.dropout(core_output)
             
+            # Feed-forward with residual connection and layer norm
             residual = core_output
             core_output = self.layer_norms2[i](core_output)
             core_output = self.ffns[i](core_output)
@@ -125,7 +151,7 @@ class TitansMAG(TitansBase):
         # Process through neural memory (memory branch)
         memory_output, _ = self.neural_memory(x, is_training=is_training)
         
-        # Apply gating mechanism
+        # Apply gating mechanism with improved stability
         core_output_norm = self.gate_norm1(core_output)
         memory_output_norm = self.gate_norm2(memory_output)
         
@@ -133,8 +159,9 @@ class TitansMAG(TitansBase):
         gate_input = torch.cat([core_output_norm, memory_output_norm], dim=-1)
         gate = torch.sigmoid(self.gate_proj(gate_input))
         
-        # Combine outputs with gating
+        # Combine outputs with gating and gradient scaling
         output = gate * core_output + (1 - gate) * memory_output
+        output = output / output.abs().mean().clamp(min=1)
         
         # Final projection
         output = self.output_projection(output)

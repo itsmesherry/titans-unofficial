@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import math
 
 from titans.models.titans_base import TitansBase
 from titans.utils.attention import SlidingWindowAttention
@@ -66,14 +67,9 @@ class TitansMAL(TitansBase):
             for _ in range(n_layers)
         ])
         
-        # Feed-forward networks
+        # Feed-forward networks with improved initialization
         self.ffns = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(d_model, 4 * d_model),
-                nn.GELU(),
-                nn.Linear(4 * d_model, d_model),
-                nn.Dropout(dropout),
-            )
+            self._create_ffn()
             for _ in range(n_layers)
         ])
         
@@ -82,6 +78,30 @@ class TitansMAL(TitansBase):
         
         # Output projection
         self.output_projection = nn.Linear(d_model, d_model)
+        
+        # Initialize all weights
+        self.apply(self._init_weights)
+        
+    def _init_weights(self, module: nn.Module) -> None:
+        """Initialize weights with improved scaling."""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.ones_(module.weight)
+            nn.init.zeros_(module.bias)
+            
+    def _create_ffn(self) -> nn.Sequential:
+        """Create a feed-forward network with improved architecture."""
+        dropout_prob = self.dropout.p if isinstance(self.dropout, nn.Dropout) else self.dropout
+        return nn.Sequential(
+            nn.Linear(self.d_model, 4 * self.d_model),
+            nn.GELU(),
+            nn.Dropout(dropout_prob),
+            nn.Linear(4 * self.d_model, self.d_model),
+            nn.Dropout(dropout_prob),
+        )
         
     def forward(
         self,
@@ -101,21 +121,21 @@ class TitansMAL(TitansBase):
         # Prepend persistent memory tokens
         x_with_persistent = self.persistent_memory.prepend_to_sequence(x)
         
-        # Process through neural memory first
+        # Process through neural memory first with gradient scaling
         memory_output, _ = self.neural_memory(x_with_persistent, is_training=is_training)
         memory_output = self.memory_norm(memory_output)
+        memory_output = memory_output / memory_output.abs().mean().clamp(min=1)
         
         # Process through attention layers
         output = memory_output
         for i in range(self.n_layers):
-            # Self-attention
+            # Self-attention with residual connection and layer norm
             residual = output
             output = self.layer_norms1[i](output)
             output = self.attention_layers[i](output)
-            output = self.dropout(output)
-            output = residual + output
+            output = residual + self.dropout(output)
             
-            # Feed-forward
+            # Feed-forward with residual connection and layer norm
             residual = output
             output = self.layer_norms2[i](output)
             output = self.ffns[i](output)
@@ -124,8 +144,9 @@ class TitansMAL(TitansBase):
         # Remove persistent tokens
         output = output[:, self.persistent_tokens:, :]
         
-        # Final projection
+        # Final projection with gradient scaling
         output = self.output_projection(output)
+        output = output / output.abs().mean().clamp(min=1)
         
         return output 
     
