@@ -8,8 +8,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="titans-unofficial",
-    use_scm_version=True,
-    setup_requires=['setuptools_scm'],
+    version="1.0.4",
     author="Shehryar Sohail",
     author_email="hafizshehryar@gmail.com",
     description="Unofficial PyTorch implementation of Titans: Learning to Memorize at Test Time",
