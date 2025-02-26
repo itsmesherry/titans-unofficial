@@ -12,7 +12,7 @@ except FileNotFoundError:
 
 setup(
     name="titans-unofficial",
-    version="1.0.8",
+    version="1.0.9",
     author="Shehryar Sohail",
     author_email="hafizshehryar@gmail.com",
     description="Unofficial PyTorch implementation of Titans: Learning to Memorize at Test Time",
