@@ -12,14 +12,18 @@ except FileNotFoundError:
 
 setup(
     name="titans-unofficial",
-    version="1.0.6",
+    version="1.0.7",
     author="Shehryar Sohail",
     author_email="hafizshehryar@gmail.com",
     description="Unofficial PyTorch implementation of Titans: Learning to Memorize at Test Time",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Shehryar718/titans-unofficial",
-    packages=find_packages(include=["titans", "titans.*"]),
+    packages=find_packages(),
+    package_data={
+        "titans": ["models/*.py", "utils/*.py"],
+    },
+    include_package_data=True,
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
