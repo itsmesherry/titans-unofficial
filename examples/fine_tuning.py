@@ -1,17 +1,13 @@
+import time
+from typing import Any, Dict, List, Optional
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import sys
-import os
-import numpy as np
-import time
-import random
-import math
-from typing import List, Dict, Tuple, Optional, Generator, Any, Iterator
-from torch.utils.data import Dataset, DataLoader, IterableDataset
-import gc
-# sys.path.append('examples')
-from language_modeling import TitansForLanguageModeling, SimpleTokenizer
+from torch.utils.data import DataLoader, Dataset
+
+from language_modeling import TitansForLanguageModeling
+
 
 class MemoryEfficientDataset(Dataset):
     """
@@ -179,7 +175,7 @@ def compute_loss(
         Loss tensor
     """
     # Reshape logits
-    batch_size, seq_len, vocab_size = logits.shape
+    _, _, vocab_size = logits.shape
     logits = logits.view(-1, vocab_size)
     
     # Reshape targets
@@ -206,14 +202,11 @@ def train_epoch(
     optimizer.zero_grad()  # Zero gradients at start of epoch
     
     for batch_idx, batch in enumerate(dataloader):
-        # Move batch to device
         input_ids = batch["input_ids"].to(device)
         target_ids = batch["target_ids"].to(device)
         
-        # Forward pass
         logits = model(input_ids)
         
-        # Compute loss
         loss = compute_loss(logits, target_ids)
         # Scale loss by accumulation steps
         loss = loss / accumulation_steps
@@ -223,7 +216,6 @@ def train_epoch(
             print(f"Warning: Non-finite loss detected: {loss.item()}. Skipping batch.")
             continue
             
-        # Backward pass
         loss.backward()
         
         # Step optimization after accumulation
@@ -244,7 +236,6 @@ def train_epoch(
                 optimizer.zero_grad()
                 continue
             
-            # Update parameters
             optimizer.step()
             optimizer.zero_grad()
         
@@ -280,20 +271,13 @@ def evaluate(
     
     with torch.no_grad():
         for batch in dataloader:
-            # Move batch to device
             input_ids = batch["input_ids"].to(device)
             target_ids = batch["target_ids"].to(device)
             
-            # Forward pass
             logits = model(input_ids, is_training=False)
-            
-            # Compute loss
             loss = compute_loss(logits, target_ids)
-            
-            # Accumulate loss
             total_loss += loss.item()
     
-    # Return average loss
     return total_loss / len(dataloader)
 
 def generate_sample(
@@ -336,12 +320,13 @@ def generate_sample(
         print(f"Error during generation: {e}")
         return prompt  # Return original prompt if generation fails
     
-    # Decode
     generated_text = tokenizer.decode(generated_ids[0].cpu().tolist())
     
     return generated_text
 
 def main():
+    # Optimizer with warmup and scheduling
+    from transformers import get_linear_schedule_with_warmup
     from transformers import BertTokenizerFast
     import random
     import numpy as np
@@ -381,8 +366,6 @@ def main():
         "This approach bridges the gap between training and deployment in real-world applications.",
         "Titans represent a step forward in developing more adaptive and efficient neural networks.",
     ]
-
-    texts = texts * 1
 
     # Create dataset and dataloader
     dataset = MemoryEfficientDataset(texts, tokenizer, max_length=64)
@@ -430,16 +413,13 @@ def main():
     )
     model.to(device)
 
-   # Create optimizer with warmup and scheduling
-    from transformers import get_linear_schedule_with_warmup
-
     # Calculate number of training steps
     num_epochs = 10
     num_training_steps = len(train_dataloader) * num_epochs
     num_warmup_steps = num_training_steps // 10  # 10% of training for warmup
 
     # Create optimizer
-    optimizer = optim.AdamW(  # Switch to AdamW for better regularization
+    optimizer = optim.AdamW(
         model.parameters(),
         lr=1e-3,
         betas=(0.9, 0.999),
