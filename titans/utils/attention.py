@@ -5,6 +5,10 @@ import math
 from typing import Optional
 
 class MultiHeadAttention(nn.Module):
+    """
+    Multi-head attention with optional sliding window.
+    """
+    
     def __init__(
         self,
         d_model: int,
@@ -12,6 +16,15 @@ class MultiHeadAttention(nn.Module):
         window_size: Optional[int] = None,
         dropout: float = 0.1,
     ):
+        """
+        Initialize the multi-head attention module.
+        
+        Args:
+            d_model: Dimension of the model
+            n_heads: Number of attention heads
+            window_size: Size of the sliding window (None for full attention)
+            dropout: Dropout probability
+        """
         super().__init__()
         
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
@@ -36,6 +49,18 @@ class MultiHeadAttention(nn.Module):
         v: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """
+        Forward pass through the multi-head attention.
+        
+        Args:
+            q: Query tensor of shape (batch_size, seq_len_q, d_model)
+            k: Key tensor of shape (batch_size, seq_len_k, d_model)
+            v: Value tensor of shape (batch_size, seq_len_v, d_model)
+            mask: Optional mask tensor of shape (seq_len_q, seq_len_k)
+            
+        Returns:
+            Output tensor of shape (batch_size, seq_len_q, d_model)
+        """
         batch_size = q.size(0)
         
         # Linear projections and reshape for multi-head attention
@@ -78,6 +103,18 @@ class MultiHeadAttention(nn.Module):
         window_size: int,
         device: torch.device,
     ) -> torch.Tensor:
+        """
+        Create a sliding window mask.
+        
+        Args:
+            seq_len_q: Length of the query sequence
+            seq_len_k: Length of the key sequence
+            window_size: Size of the sliding window
+            device: Device to create the mask on
+            
+        Returns:
+            Boolean mask tensor of shape (seq_len_q, seq_len_k)
+        """
         mask = torch.zeros(seq_len_q, seq_len_k, dtype=torch.bool, device=device)
         
         for i in range(seq_len_q):
@@ -88,6 +125,10 @@ class MultiHeadAttention(nn.Module):
         return mask
     
 class SlidingWindowAttention(nn.Module):
+    """
+    Sliding window attention as described in the paper.
+    """
+    
     def __init__(
         self,
         d_model: int,
@@ -95,6 +136,15 @@ class SlidingWindowAttention(nn.Module):
         window_size: int,
         dropout: float = 0.1,
     ):
+        """
+        Initialize the sliding window attention module.
+        
+        Args:
+            d_model: Dimension of the model
+            n_heads: Number of attention heads
+            window_size: Size of the sliding window
+            dropout: Dropout probability
+        """
         super().__init__()
         
         self.attention = MultiHeadAttention(
@@ -109,9 +159,23 @@ class SlidingWindowAttention(nn.Module):
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """
+        Forward pass through the sliding window attention.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, d_model)
+            mask: Optional mask tensor
+            
+        Returns:
+            Output tensor of shape (batch_size, seq_len, d_model)
+        """
         return self.attention(x, x, x, mask)
 
 class CausalSelfAttention(nn.Module):
+    """
+    Causal self-attention with optional sliding window.
+    """
+    
     def __init__(
         self,
         d_model: int,
@@ -119,6 +183,15 @@ class CausalSelfAttention(nn.Module):
         window_size: Optional[int] = None,
         dropout: float = 0.1,
     ):
+        """
+        Initialize the causal self-attention module.
+        
+        Args:
+            d_model: Dimension of the model
+            n_heads: Number of attention heads
+            window_size: Size of the sliding window (None for full attention)
+            dropout: Dropout probability
+        """
         super().__init__()
         
         self.attention = MultiHeadAttention(
@@ -132,6 +205,15 @@ class CausalSelfAttention(nn.Module):
         self,
         x: torch.Tensor,
     ) -> torch.Tensor:
+        """
+        Forward pass through the causal self-attention.
+        
+        Args:
+            x: Input tensor of shape (batch_size, seq_len, d_model)
+            
+        Returns:
+            Output tensor of shape (batch_size, seq_len, d_model)
+        """
         seq_len = x.size(1)
         
         # Create causal mask
