@@ -3,16 +3,13 @@ from setuptools import setup, find_packages
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-# Read dependencies from requirements.txt
-try:
-    with open("requirements.txt", "r", encoding="utf-8") as fh:
-        requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
-except FileNotFoundError:
-    requirements = []
+requirements = [
+    "torch"
+]
 
 setup(
     name="titans-unofficial",
-    version="1.0.9",
+    version="1.1.0",
     author="Shehryar Sohail",
     author_email="hafizshehryar@gmail.com",
     description="Unofficial PyTorch implementation of Titans: Learning to Memorize at Test Time",
@@ -37,10 +34,16 @@ setup(
     install_requires=requirements,
     extras_require={
         "dev": [
-            "pytest>=8.3.4",
+            "pytest>=7.4.0",
+            "pytest-asyncio>=0.23.0",
             "black>=22.0.0",
             "isort>=5.10.0",
             "flake8>=4.0.0",
+        ],
+        "examples": [
+            "numpy",
+            "transformers",
+            "einops"
         ],
     },
     zip_safe=False,

@@ -24,7 +24,14 @@ Titans is a novel neural architecture that combines attention-based short-term m
 ### From PyPI (Recommended)
 
 ```bash
+# Install core package (minimal dependencies)
 pip install titans-unofficial
+
+# Install with examples dependencies (for running example scripts)
+pip install "titans-unofficial[examples]"
+
+# Install with development dependencies (for contributing)
+pip install "titans-unofficial[dev]"
 ```
 
 ### From Source (Development)
@@ -35,16 +42,8 @@ git clone https://github.com/Shehryar718/titans-unofficial.git
 cd titans-unofficial
 
 # Install in development mode with all extras
-pip install -e ".[dev]"
+pip install -e ".[dev,examples]"
 ```
-
-## Requirements
-
-- Python 3.10+
-- PyTorch 2.0+
-- transformers (for tokenization)
-- numpy
-- pytest (for running tests)
 
 ## Project Structure
 
@@ -128,6 +127,7 @@ python examples/fine_tuning.py
 ### Neural Memory Module
 
 The neural memory module consists of:
+
 - Key/Value/Query projections for memory access
 - Multi-layer perceptron for memory processing
 - Momentum-based update mechanism with configurable parameters
@@ -137,12 +137,14 @@ The neural memory module consists of:
 ### Variants
 
 1. **MAC (Memory as Context)**
+
    - Memory output serves as additional context
    - Efficient for tasks requiring long-range dependencies
    - Parallel processing with chunked computation
    - Configurable chunk size and parallel processing
 
 2. **MAG (Memory as Gate)**
+
    - Gating mechanism to combine memory with core processing
    - Adaptive balance between short and long-term memory
    - Enhanced numerical stability
@@ -157,11 +159,13 @@ The neural memory module consists of:
 ## Example Tasks
 
 The repository includes implementations for:
+
 - Text Classification (Binary and multi-class)
 - Language Modeling with test-time adaptation
 - Fine-tuning with early stopping
 
 Each example demonstrates different aspects of the Titans architecture:
+
 - Memory reset between epochs for fresh adaptation
 - Efficient batch processing with dynamic batching
 - Gradient scaling for numerical stability
@@ -199,4 +203,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-

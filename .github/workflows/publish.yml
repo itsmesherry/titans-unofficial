@@ -21,8 +21,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -q
-          pip install build twine
+          pip install build twine -q
+          pip install -e ".[dev]" -q
 
       - name: Run tests
         run: |
