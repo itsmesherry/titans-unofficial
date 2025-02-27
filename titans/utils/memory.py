@@ -234,6 +234,15 @@ class NeuralMemoryModule(nn.Module):
                 if layer.bias is not None and bias_momentum is not None:
                     layer.bias.data = layer.bias.data + bias_momentum
     
+    def to(self, device):
+        """Move the module to the specified device."""
+        super().to(device)
+        if self.surprise_momentum is not None:
+            self.surprise_momentum = [(w.to(device) if w is not None else None, 
+                                     b.to(device) if b is not None else None) 
+                                    for w, b in self.surprise_momentum]
+        return self
+
     def forward(
         self, 
         x: torch.Tensor, 
@@ -249,6 +258,9 @@ class NeuralMemoryModule(nn.Module):
         Returns:
             Tuple of (output, memory_output)
         """
+        device = x.device
+        self.to(device)  # Ensure module is on same device as input
+        
         batch_size, seq_len, _ = x.shape
         
         # Process the sequence token by token

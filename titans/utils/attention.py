@@ -72,6 +72,9 @@ class MultiHeadAttention(nn.Module):
         Returns:
             Output tensor of shape (batch_size, seq_len_q, d_model)
         """
+        device = q.device
+        self.to(device)  # Ensure module is on same device as input
+        
         batch_size = q.size(0)
         
         # Linear projections and reshape for multi-head attention
@@ -92,7 +95,7 @@ class MultiHeadAttention(nn.Module):
         # Apply sliding window mask if specified
         if self.window_size is not None:
             window_mask = self.create_sliding_window_mask(
-                q.size(2), k.size(2), self.window_size, device=q.device
+                q.size(2), k.size(2), self.window_size, device=device
             )
             if mask is not None:
                 mask = mask & window_mask
@@ -101,6 +104,7 @@ class MultiHeadAttention(nn.Module):
         
         # Apply mask and scale
         if mask is not None:
+            mask = mask.to(device) 
             scores = scores.masked_fill(mask == 0, -1e4)  # Use -1e4 instead of -inf for stability
         
         # Apply softmax with numerical stability

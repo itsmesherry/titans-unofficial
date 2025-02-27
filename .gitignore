@@ -46,3 +46,4 @@ ENV/
 wandb/
 logs/
 checkpoints/
+research_paper/

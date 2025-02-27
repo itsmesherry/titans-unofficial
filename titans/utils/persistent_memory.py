@@ -56,6 +56,9 @@ class PersistentMemory(nn.Module):
         Returns:
             Tensor with prepended persistent memory tokens
         """
+        device = x.device
+        self.to(device)  # Ensure module is on same device as input
+        
         batch_size = x.size(0)
 
         # Get persistent memory tokens

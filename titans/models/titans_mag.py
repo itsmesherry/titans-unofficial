@@ -125,7 +125,8 @@ class TitansMAG(TitansBase):
         Returns:
             Output tensor of shape (batch_size, seq_len, d_model)
         """
-        batch_size = x.size(0)
+        device = x.device
+        self.to(device)  # Ensure model is on same device as input
         
         # Prepend persistent memory tokens
         x_with_persistent = self.persistent_memory.prepend_to_sequence(x)

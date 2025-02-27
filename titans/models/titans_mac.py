@@ -202,10 +202,13 @@ class TitansMAC(TitansBase):
         Returns:
             Output tensor of shape (batch_size, seq_len, d_model)
         """
+        device = x.device
+        self.to(device)  # Ensure model is on same device as input
+        
         batch_size, seq_len, _ = x.shape
         
         # Get persistent tokens once
-        persistent_tokens = self.persistent_memory.forward(batch_size)
+        persistent_tokens = self.persistent_memory.forward(batch_size).to(device)
         
         # Process the sequence in chunks
         chunk_outputs = []
