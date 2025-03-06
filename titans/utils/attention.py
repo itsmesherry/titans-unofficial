@@ -6,7 +6,8 @@ from typing import Optional
 
 class MultiHeadAttention(nn.Module):
     """
-    Multi-head attention with optional sliding window and numerical stability enhancements.
+    Multi-head attention with optional sliding window support.
+    Core attention mechanism used in all Titans variants.
     """
     
     def __init__(
@@ -17,16 +18,7 @@ class MultiHeadAttention(nn.Module):
         dropout: float = 0.1,
         attention_scale: float = 1.0,
     ):
-        """
-        Initialize the multi-head attention module.
-        
-        Args:
-            d_model: Dimension of the model
-            n_heads: Number of attention heads
-            window_size: Size of the sliding window (None for full attention)
-            dropout: Dropout probability
-            attention_scale: Additional scaling factor for attention scores
-        """
+        """Initialize the multi-head attention."""
         super().__init__()
         
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
@@ -37,7 +29,7 @@ class MultiHeadAttention(nn.Module):
         self.window_size = window_size
         self.attention_scale = attention_scale
         
-        # Projection matrices with Xavier initialization
+        # Projection matrices
         self.W_Q = nn.Linear(d_model, d_model, bias=False)
         self.W_K = nn.Linear(d_model, d_model, bias=False)
         self.W_V = nn.Linear(d_model, d_model, bias=False)
@@ -49,7 +41,7 @@ class MultiHeadAttention(nn.Module):
         self.scale = math.sqrt(self.d_head)
         
     def _init_weights(self) -> None:
-        """Initialize weights using Xavier uniform initialization."""
+        """Initialize weights."""
         for module in [self.W_Q, self.W_K, self.W_V, self.W_O]:
             nn.init.xavier_uniform_(module.weight)
     
@@ -60,62 +52,55 @@ class MultiHeadAttention(nn.Module):
         v: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Forward pass through the multi-head attention with enhanced numerical stability.
-        
-        Args:
-            q: Query tensor of shape (batch_size, seq_len_q, d_model)
-            k: Key tensor of shape (batch_size, seq_len_k, d_model)
-            v: Value tensor of shape (batch_size, seq_len_v, d_model)
-            mask: Optional mask tensor of shape (seq_len_q, seq_len_k)
-            
-        Returns:
-            Output tensor of shape (batch_size, seq_len_q, d_model)
-        """
+        """Forward pass through the multi-head attention."""
         batch_size = q.size(0)
+        device = q.device
         
-        # Linear projections and reshape for multi-head attention
+        # Ensure all inputs are on the same device
+        q = q.to(device)
+        k = k.to(device)
+        v = v.to(device)
+        
+        # Linear projections and reshape
         q = self.W_Q(q).view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         k = self.W_K(k).view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         v = self.W_V(v).view(batch_size, -1, self.n_heads, self.d_head).transpose(1, 2)
         
-        # Scale query for numerical stability
+        # Scale query
         q = q / self.scale
         
-        # Compute attention scores with enhanced numerical stability
+        # Compute attention scores
         scores = torch.matmul(q, k.transpose(-2, -1))
         
-        # Apply additional stability measures
+        # Apply scaling
         scores = scores * self.attention_scale
-        scores = scores / scores.abs().max().clamp(min=1)
         
         # Apply sliding window mask if specified
         if self.window_size is not None:
             window_mask = self.create_sliding_window_mask(
-                q.size(2), k.size(2), self.window_size, device=q.device
+                q.size(2), k.size(2), self.window_size, device=device
             )
             if mask is not None:
-                mask = mask & window_mask
+                mask = mask.to(device) & window_mask
             else:
                 mask = window_mask
+        elif mask is not None:
+            mask = mask.to(device)
         
-        # Apply mask and scale
+        # Apply mask if provided
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e4)  # Use -1e4 instead of -inf for stability
+            scores = scores.masked_fill(~mask.unsqueeze(0).unsqueeze(0), -1e9)
         
-        # Apply softmax with numerical stability
+        # Apply softmax and dropout
         attn_weights = F.softmax(scores, dim=-1)
-        
-        # Apply dropout
         attn_weights = self.dropout(attn_weights)
         
-        # Compute output with gradient scaling
+        # Compute weighted sum of values
         output = torch.matmul(attn_weights, v)
-        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         
-        # Final projection with residual scaling
+        # Reshape and apply output projection
+        output = output.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
         output = self.W_O(output)
-        output = output / (output.abs().mean().clamp(min=1))
         
         return output
     
@@ -126,30 +111,21 @@ class MultiHeadAttention(nn.Module):
         window_size: int,
         device: torch.device,
     ) -> torch.Tensor:
-        """
-        Create a sliding window mask.
+        """Create a sliding window mask for attention."""
+        # Create position indices
+        q_pos = torch.arange(seq_len_q, device=device).unsqueeze(1)
+        k_pos = torch.arange(seq_len_k, device=device).unsqueeze(0)
         
-        Args:
-            seq_len_q: Length of the query sequence
-            seq_len_k: Length of the key sequence
-            window_size: Size of the sliding window
-            device: Device to create the mask on
-            
-        Returns:
-            Boolean mask tensor of shape (seq_len_q, seq_len_k)
-        """
-        mask = torch.zeros(seq_len_q, seq_len_k, dtype=torch.bool, device=device)
+        # Calculate position differences and apply window constraint
+        pos_diff = q_pos - k_pos
+        window_mask = (pos_diff >= 0) & (pos_diff < window_size)
         
-        for i in range(seq_len_q):
-            start = max(0, i - window_size + 1)
-            end = i + 1  # +1 for causal attention
-            mask[i, start:end] = True
-            
-        return mask
-    
+        return window_mask
+
+
 class SlidingWindowAttention(nn.Module):
     """
-    Sliding window attention as described in the paper.
+    Sliding window attention used in MAG and MAL variants as short-term memory.
     """
     
     def __init__(
@@ -159,15 +135,7 @@ class SlidingWindowAttention(nn.Module):
         window_size: int,
         dropout: float = 0.1,
     ):
-        """
-        Initialize the sliding window attention module.
-        
-        Args:
-            d_model: Dimension of the model
-            n_heads: Number of attention heads
-            window_size: Size of the sliding window
-            dropout: Dropout probability
-        """
+        """Initialize the sliding window attention."""
         super().__init__()
         
         self.attention = MultiHeadAttention(
@@ -182,21 +150,20 @@ class SlidingWindowAttention(nn.Module):
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """
-        Forward pass through the sliding window attention.
-        
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            mask: Optional mask tensor
+        """Forward pass through the sliding window attention."""
+        # Make sure input and mask are on the same device
+        device = x.device
+        if mask is not None:
+            mask = mask.to(device)
             
-        Returns:
-            Output tensor of shape (batch_size, seq_len, d_model)
-        """
         return self.attention(x, x, x, mask)
+
 
 class CausalSelfAttention(nn.Module):
     """
-    Causal self-attention with optional sliding window.
+    Causal self-attention used in the MAC variant.
+    
+    Ensures each token can only attend to itself and previous tokens.
     """
     
     def __init__(
@@ -206,15 +173,7 @@ class CausalSelfAttention(nn.Module):
         window_size: Optional[int] = None,
         dropout: float = 0.1,
     ):
-        """
-        Initialize the causal self-attention module.
-        
-        Args:
-            d_model: Dimension of the model
-            n_heads: Number of attention heads
-            window_size: Size of the sliding window (None for full attention)
-            dropout: Dropout probability
-        """
+        """Initialize the causal self-attention."""
         super().__init__()
         
         self.attention = MultiHeadAttention(
@@ -228,20 +187,13 @@ class CausalSelfAttention(nn.Module):
         self,
         x: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Forward pass through the causal self-attention.
-        
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            
-        Returns:
-            Output tensor of shape (batch_size, seq_len, d_model)
-        """
+        """Forward pass through the causal self-attention."""
         seq_len = x.size(1)
+        device = x.device
         
-        # Create causal mask
+        # Create causal mask (lower triangular)
         causal_mask = torch.tril(
-            torch.ones(seq_len, seq_len, dtype=torch.bool, device=x.device)
+            torch.ones(seq_len, seq_len, dtype=torch.bool, device=device)
         )
         
         return self.attention(x, x, x, causal_mask) 

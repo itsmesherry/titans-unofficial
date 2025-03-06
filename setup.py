@@ -9,7 +9,7 @@ requirements = [
 
 setup(
     name="titans-unofficial",
-    version="1.1.0",
+    version="1.1.1",
     author="Shehryar Sohail",
     author_email="hafizshehryar@gmail.com",
     description="Unofficial PyTorch implementation of Titans: Learning to Memorize at Test Time",

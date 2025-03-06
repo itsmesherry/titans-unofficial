@@ -7,11 +7,10 @@ from typing import Optional, Tuple, List
 
 class NeuralMemoryModule(nn.Module):
     """
-    Neural Memory Module as described in the paper "Learning to Memorize at Test Time".
+    Neural Memory Module that learns to memorize at test time.
     
-    This module implements a deep neural network that learns to memorize at test time.
-    It uses gradient descent with momentum and weight decay to update its parameters
-    during inference.
+    Implements equations from Section 2.1 of the paper, using gradient descent
+    with momentum and weight decay to update memory parameters during inference.
     """
     
     def __init__(
@@ -22,16 +21,7 @@ class NeuralMemoryModule(nn.Module):
         use_momentum: bool = True,
         use_weight_decay: bool = True,
     ):
-        """
-        Initialize the Neural Memory Module.
-        
-        Args:
-            d_model: Dimension of the model
-            memory_depth: Depth of the memory MLP (number of layers)
-            memory_dim: Dimension of the memory (if None, uses d_model)
-            use_momentum: Whether to use momentum in the surprise metric
-            use_weight_decay: Whether to use weight decay (forgetting mechanism)
-        """
+        """Initialize the Neural Memory Module."""
         super().__init__()
         
         self.d_model = d_model
@@ -46,20 +36,22 @@ class NeuralMemoryModule(nn.Module):
         self.W_Q = nn.Linear(d_model, self.memory_dim, bias=False)
         
         # Data-dependent parameters for surprise metric and forgetting
-        self.theta_proj = nn.Linear(d_model, 1) # Learning rate
-        self.eta_proj = nn.Linear(d_model, 1)   # Momentum decay
-        self.alpha_proj = nn.Linear(d_model, 1) # Weight decay
+        self.theta_proj = nn.Linear(d_model, 1)  # Learning rate (θ)
+        self.eta_proj = nn.Linear(d_model, 1)    # Momentum decay (η)
+        self.alpha_proj = nn.Linear(d_model, 1)  # Weight decay (α)
         
         # Initialize the memory MLP
         self.memory_layers = nn.ModuleList()
-        for _ in range(memory_depth):
+        for i in range(memory_depth):
             self.memory_layers.append(nn.Linear(self.memory_dim, self.memory_dim))
-                
-        # Initialize memory state
+        
+        # Initialize momentum buffers to None
+        self.surprise_momentum = None
+        
         self.reset_memory()
 
     def reset_memory(self) -> None:
-        """Reset the memory state and clear any stored gradients."""
+        """Reset the memory state."""
         # Initialize memory parameters
         for layer in self.memory_layers:
             nn.init.kaiming_uniform_(layer.weight, a=math.sqrt(5))
@@ -68,23 +60,14 @@ class NeuralMemoryModule(nn.Module):
                 bound = 1 / math.sqrt(fan_in)
                 nn.init.uniform_(layer.bias, -bound, bound)
         
-        # Initialize momentum
+        # Initialize momentum to None so it will be created on the right device
         self.surprise_momentum = None
         
-        # Clear CUDA cache if available
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
     
     def memory_forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through the memory MLP without weight updates.
-        
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            
-        Returns:
-            Output tensor after passing through the memory MLP
-        """
+        """Forward pass through the memory MLP without weight updates."""
         for i, layer in enumerate(self.memory_layers):
             if i < self.memory_depth - 1:
                 x = F.relu(layer(x))
@@ -93,39 +76,18 @@ class NeuralMemoryModule(nn.Module):
         return x
     
     def compute_loss(self, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        """
-        Compute the associative memory loss.
-        
-        Args:
-            k: Key tensor
-            v: Value tensor
-            
-        Returns:
-            Loss value
-        """
-        # Forward pass through memory without weight update
+        """Compute the associative memory loss (equation 3)."""
         pred_v = self.memory_forward(k)
-        
-        # Compute MSE loss with numerical stability
         loss = F.mse_loss(pred_v, v, reduction='none')
-        loss = loss.clamp(min=1e-10, max=1e10)  # Prevent extreme values
+        loss = loss.clamp(min=1e-10, max=1e10)  # For numerical stability
         return loss.mean(dim=-1, keepdim=True)
     
     def compute_gradient(self, k: torch.Tensor, v: torch.Tensor) -> List[Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]]:
-        """
-        Compute the gradient of the loss with respect to the memory parameters.
-        
-        Args:
-            k: Key tensor
-            v: Value tensor
-            
-        Returns:
-            List of (weight_grad, bias_grad) tuples for each layer
-        """
-        # Enable gradient computation
+        """Compute the gradient of the loss (momentary surprise in eq. 2)."""
+        device = k.device
         try:
             with torch.enable_grad():
-                # Create a copy of the memory layers with requires_grad=True
+                # Create temporary layers with requires_grad=True
                 temp_layers = nn.ModuleList()
                 for layer in self.memory_layers:
                     temp_layer = nn.Linear(layer.in_features, layer.out_features, 
@@ -133,23 +95,21 @@ class NeuralMemoryModule(nn.Module):
                     temp_layer.weight.data.copy_(layer.weight.data)
                     if layer.bias is not None:
                         temp_layer.bias.data.copy_(layer.bias.data)
+                    # Ensure temp layer is on the same device as input
+                    temp_layer = temp_layer.to(device)
                     temp_layers.append(temp_layer)
                 
-                # Forward pass through temporary layers
-                x = k.detach().clone()  # Detach input from computation graph
-                activations = []
+                # Forward pass
+                x = k.detach().clone()
                 for i, layer in enumerate(temp_layers):
                     if i < self.memory_depth - 1:
                         x = F.relu(layer(x))
                     else:
                         x = layer(x)
-                    activations.append(x)
                 
-                # Compute loss with numerical stability
+                # Compute loss and gradients
                 loss = F.mse_loss(x, v.detach().clone())
                 loss = loss.clamp(min=1e-10, max=1e10)
-                
-                # Compute gradients
                 loss.backward()
                 
                 # Extract gradients
@@ -161,7 +121,6 @@ class NeuralMemoryModule(nn.Module):
                 
                 # Clean up
                 del temp_layers
-                del activations
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                     
@@ -178,15 +137,9 @@ class NeuralMemoryModule(nn.Module):
         eta: torch.Tensor, 
         alpha: torch.Tensor
     ) -> None:
-        """
-        Update the memory parameters using the surprise metric.
+        """Update memory parameters using the surprise metric (equation 4)."""
+        device = x.device
         
-        Args:
-            x: Input tensor
-            theta: Learning rate
-            eta: Momentum decay
-            alpha: Weight decay
-        """
         # Project input to key and value
         k = self.W_K(x)
         v = self.W_V(x)
@@ -194,64 +147,77 @@ class NeuralMemoryModule(nn.Module):
         # Compute gradients
         gradients = self.compute_gradient(k, v)
         
-        # Update memory parameters with momentum and weight decay
+        # Update memory parameters
         for i, ((weight_grad, bias_grad), layer) in enumerate(zip(gradients, self.memory_layers)):
+            # Skip update if gradients are None
+            if weight_grad is None:
+                continue
+                
             # Initialize momentum if not exists
             if self.surprise_momentum is None:
                 self.surprise_momentum = []
-                for _ in range(len(self.memory_layers)):
-                    weight_momentum = torch.zeros_like(layer.weight)
-                    bias_momentum = torch.zeros_like(layer.bias) if layer.bias is not None else None
+                for layer in self.memory_layers:
+                    # Create momentum buffers on the same device as the model
+                    weight_momentum = torch.zeros_like(layer.weight, device=device)
+                    bias_momentum = torch.zeros_like(layer.bias, device=device) if layer.bias is not None else None
                     self.surprise_momentum.append((weight_momentum, bias_momentum))
             
-            # Update momentum (past surprise)
+            # Update momentum (S_t in equation 4)
             if self.use_momentum:
                 weight_momentum, bias_momentum = self.surprise_momentum[i]
-                # Ensure proper broadcasting by using mean values of the parameters
+                # Ensure tensors are on the right device
+                weight_momentum = weight_momentum.to(device)
+                if bias_momentum is not None:
+                    bias_momentum = bias_momentum.to(device)
+                
                 theta_scalar = theta.mean().item()
                 eta_scalar = eta.mean().item()
                 alpha_scalar = alpha.mean().item()
                 
+                # S_t = η_t * S_{t-1} - θ_t * ∇ℓ(M_{t-1}; x_t)
+                # Ensure weight_grad is on the same device as weight_momentum
+                weight_grad = weight_grad.to(device)
                 weight_momentum = eta_scalar * weight_momentum - theta_scalar * weight_grad
+                
                 if bias_grad is not None and bias_momentum is not None:
+                    bias_grad = bias_grad.to(device)
                     bias_momentum = eta_scalar * bias_momentum - theta_scalar * bias_grad
+                
                 self.surprise_momentum[i] = (weight_momentum, bias_momentum)
             else:
-                # Ensure proper broadcasting by using mean values of the parameters
                 theta_scalar = theta.mean().item()
+                weight_grad = weight_grad.to(device)
                 weight_momentum = -theta_scalar * weight_grad
-                bias_momentum = -theta_scalar * bias_grad if bias_grad is not None else None
+                
+                bias_momentum = None
+                if bias_grad is not None:
+                    bias_grad = bias_grad.to(device)
+                    bias_momentum = -theta_scalar * bias_grad
             
-            # Update weights with weight decay (forgetting mechanism)
+            # Update weights with weight decay (forgetting mechanism in equation 4)
             if self.use_weight_decay:
-                # Ensure proper broadcasting by using mean values of the parameters
                 alpha_scalar = alpha.mean().item()
-                layer.weight.data = (1 - alpha_scalar) * layer.weight.data + weight_momentum
+                # M_t = (1 - α_t) * M_{t-1} + S_t
+                # Ensure device consistency
+                layer.weight.data = ((1 - alpha_scalar) * layer.weight.data + weight_momentum).to(device)
+                
                 if layer.bias is not None and bias_momentum is not None:
-                    layer.bias.data = (1 - alpha_scalar) * layer.bias.data + bias_momentum
+                    layer.bias.data = ((1 - alpha_scalar) * layer.bias.data + bias_momentum).to(device)
             else:
-                layer.weight.data = layer.weight.data + weight_momentum
+                layer.weight.data = (layer.weight.data + weight_momentum).to(device)
+                
                 if layer.bias is not None and bias_momentum is not None:
-                    layer.bias.data = layer.bias.data + bias_momentum
+                    layer.bias.data = (layer.bias.data + bias_momentum).to(device)
     
     def forward(
         self, 
         x: torch.Tensor, 
         is_training: bool = True
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass through the Neural Memory Module.
-        
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            is_training: Whether to update the memory parameters
-            
-        Returns:
-            Tuple of (output, memory_output)
-        """
+        """Forward pass through the Neural Memory Module."""
         batch_size, seq_len, _ = x.shape
+        device = x.device
         
-        # Process the sequence token by token
         outputs = []
         memory_outputs = []
         
@@ -259,7 +225,7 @@ class NeuralMemoryModule(nn.Module):
             # Get current token
             x_t = x[:, t, :]
             
-            # Project to query for memory retrieval
+            # Project to query for retrieval
             q_t = self.W_Q(x_t)
             
             # Retrieve from memory
@@ -269,19 +235,18 @@ class NeuralMemoryModule(nn.Module):
             # Update memory parameters if in training mode
             if is_training:
                 # Compute data-dependent parameters
-                theta_t = torch.sigmoid(self.theta_proj(x_t))   # Learning rate
-                eta_t = torch.sigmoid(self.eta_proj(x_t))       # Momentum decay
+                theta_t = torch.sigmoid(self.theta_proj(x_t))
+                eta_t = torch.sigmoid(self.eta_proj(x_t))
                 alpha_t = torch.sigmoid(self.alpha_proj(x_t))
                 
                 # Update memory
                 self.update_memory(x_t, theta_t, eta_t, alpha_t)
             
-            # Combine with input
-            output = memory_output
-            outputs.append(output)
+            # Output is the memory output
+            outputs.append(memory_output)
         
         # Stack outputs
-        outputs = torch.stack(outputs, dim=1)
-        memory_outputs = torch.stack(memory_outputs, dim=1)
+        outputs = torch.stack(outputs, dim=1).to(device)
+        memory_outputs = torch.stack(memory_outputs, dim=1).to(device)
         
         return outputs, memory_outputs

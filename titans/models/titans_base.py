@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 
 from typing import Optional
@@ -8,7 +9,9 @@ from titans.utils.persistent_memory import PersistentMemory
 
 class TitansBase(nn.Module):
     """
-    Base class for Titans models.
+    Base class for Titans models with shared components.
+    
+    Provides the neural memory and persistent memory components used by all variants.
     """
     
     def __init__(
@@ -21,18 +24,7 @@ class TitansBase(nn.Module):
         window_size: Optional[int] = None,
         dropout: float = 0.1,
     ):
-        """
-        Initialize the base Titans model.
-        
-        Args:
-            d_model: Dimension of the model
-            n_layers: Number of layers
-            n_heads: Number of attention heads
-            memory_depth: Depth of the memory MLP
-            persistent_tokens: Number of persistent memory tokens
-            window_size: Size of the sliding window (None for full attention)
-            dropout: Dropout probability
-        """
+        """Initialize the base Titans model."""
         super().__init__()
         
         self.d_model = d_model
@@ -42,18 +34,33 @@ class TitansBase(nn.Module):
         self.persistent_tokens = persistent_tokens
         self.window_size = window_size
         
-        # Persistent memory
+        # Persistent memory from Section 2.3
         self.persistent_memory = PersistentMemory(d_model, persistent_tokens)
         
-        # Neural memory module
+        # Neural memory module from Section 2.1
         self.neural_memory = NeuralMemoryModule(
             d_model=d_model,
             memory_depth=memory_depth,
         )
         
-        # Dropout
+        # Dropout for regularization
         self.dropout = nn.Dropout(dropout)
         
     def reset_memory(self):
         """Reset the neural memory module."""
         self.neural_memory.reset_memory()
+        
+    def to_device(self, device):
+        """
+        Move the model to the specified device.
+        This ensures all components are on the same device.
+        """
+        self.to(device)
+        # Explicitly move the neural memory module
+        for layer in self.neural_memory.memory_layers:
+            layer.to(device)
+        
+        # Reset momentum to ensure it will be created on the right device
+        self.neural_memory.surprise_momentum = None
+        
+        return self

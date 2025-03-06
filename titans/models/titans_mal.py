@@ -8,9 +8,10 @@ from titans.utils.attention import SlidingWindowAttention
 
 class TitansMAL(TitansBase):
     """
-    Titans with Memory as a Layer (MAL) as described in the paper.
+    Titans with Memory as Layer (MAL) as described in Section 3.3 of the paper.
     
-    In this variant, memory is used as a layer in the architecture.
+    In this variant, memory is used as an additional transformation layer
+    in the transformer architecture between attention and feed-forward layers.
     """
     
     def __init__(
@@ -23,18 +24,7 @@ class TitansMAL(TitansBase):
         window_size: int = 128,
         dropout: float = 0.1,
     ):
-        """
-        Initialize the Titans MAL model.
-        
-        Args:
-            d_model: Dimension of the model
-            n_layers: Number of layers
-            n_heads: Number of attention heads
-            memory_depth: Depth of the memory MLP
-            persistent_tokens: Number of persistent memory tokens
-            window_size: Size of the sliding window
-            dropout: Dropout probability
-        """
+        """Initialize the Titans MAL model."""
         super().__init__(
             d_model=d_model,
             n_layers=n_layers,
@@ -45,7 +35,7 @@ class TitansMAL(TitansBase):
             dropout=dropout,
         )
         
-        # Sliding window attention layers
+        # Sliding window attention
         self.attention_layers = nn.ModuleList([
             SlidingWindowAttention(
                 d_model=d_model,
@@ -67,7 +57,7 @@ class TitansMAL(TitansBase):
             for _ in range(n_layers)
         ])
         
-        # Feed-forward networks with improved initialization
+        # Feed-forward networks
         self.ffns = nn.ModuleList([
             self._create_ffn()
             for _ in range(n_layers)
@@ -79,11 +69,11 @@ class TitansMAL(TitansBase):
         # Output projection
         self.output_projection = nn.Linear(d_model, d_model)
         
-        # Initialize all weights
+        # Initialize weights
         self.apply(self._init_weights)
         
     def _init_weights(self, module: nn.Module) -> None:
-        """Initialize weights with improved scaling."""
+        """Initialize weights."""
         if isinstance(module, nn.Linear):
             nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
             if module.bias is not None:
@@ -93,7 +83,7 @@ class TitansMAL(TitansBase):
             nn.init.zeros_(module.bias)
             
     def _create_ffn(self) -> nn.Sequential:
-        """Create a feed-forward network with improved architecture."""
+        """Create a feed-forward network."""
         dropout_prob = self.dropout.p if isinstance(self.dropout, nn.Dropout) else self.dropout
         return nn.Sequential(
             nn.Linear(self.d_model, 4 * self.d_model),
@@ -108,45 +98,52 @@ class TitansMAL(TitansBase):
         x: torch.Tensor,
         is_training: bool = True,
     ) -> torch.Tensor:
-        """
-        Forward pass through the Titans MAL model.
+        """Forward pass through the Titans MAL model."""
+        batch_size, seq_len, _ = x.shape
+        device = x.device
         
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            is_training: Whether to update the memory parameters
-            
-        Returns:
-            Output tensor of shape (batch_size, seq_len, d_model)
-        """
-        # Prepend persistent memory tokens
-        x_with_persistent = self.persistent_memory.prepend_to_sequence(x)
+        # Ensure input is on the correct device
+        x = x.to(device)
         
-        # Process through neural memory first with gradient scaling
-        memory_output, _ = self.neural_memory(x_with_persistent, is_training=is_training)
-        memory_output = self.memory_norm(memory_output)
-        memory_output = memory_output / memory_output.abs().mean().clamp(min=1)
+        # Add persistent memory tokens if needed
+        if self.persistent_tokens > 0:
+            x_with_memory = self.persistent_memory.prepend_to_sequence(x)
+        else:
+            x_with_memory = x
         
-        # Process through attention layers
-        output = memory_output
+        # Ensure consistent device placement
+        output = x_with_memory.to(device)
+        
+        # Process through transformer layers with memory as a layer
         for i in range(self.n_layers):
-            # Self-attention with residual connection and layer norm
+            # 1. Self-attention with residual connection and layer norm
             residual = output
-            output = self.layer_norms1[i](output)
-            output = self.attention_layers[i](output)
-            output = residual + self.dropout(output)
+            normalized = self.layer_norms1[i](output)
+            attended = self.attention_layers[i](normalized)
+            output = residual + self.dropout(attended)
             
-            # Feed-forward with residual connection and layer norm
+            # 2. Memory layer (unique to MAL architecture)
+            memory_input = self.memory_norm(output).to(device)
+            memory_output, _ = self.neural_memory(memory_input, is_training=is_training)
+            
+            # Ensure memory_output is on the correct device
+            memory_output = memory_output.to(device)
+            
+            # Add memory contribution (residual connection)
+            output = output + memory_output
+            
+            # 3. Feed-forward with residual connection and layer norm
             residual = output
-            output = self.layer_norms2[i](output)
-            output = self.ffns[i](output)
-            output = residual + output
+            normalized = self.layer_norms2[i](output)
+            ffn_output = self.ffns[i](normalized)
+            output = residual + ffn_output
         
-        # Remove persistent tokens
-        output = output[:, self.persistent_tokens:, :]
+        # Remove persistent tokens if they were added
+        if self.persistent_tokens > 0:
+            output = output[:, self.persistent_tokens:, :]
         
-        # Final projection with gradient scaling
-        output = self.output_projection(output)
-        output = output / output.abs().mean().clamp(min=1)
+        # Final projection
+        output = self.output_projection(output.to(device))
         
         return output 
     

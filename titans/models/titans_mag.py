@@ -8,9 +8,10 @@ from titans.utils.attention import SlidingWindowAttention
 
 class TitansMAG(TitansBase):
     """
-    Titans with Memory as a Gate (MAG) as described in the paper.
+    Titans with Memory as Gating (MAG) as described in Section 3.2 of the paper.
     
-    In this variant, memory is combined with the core branch using a gating mechanism.
+    Uses sliding window attention as short-term memory and neural memory as
+    long-term memory, combining them with a gating mechanism.
     """
 
     def __init__(
@@ -23,18 +24,7 @@ class TitansMAG(TitansBase):
         window_size: int = 128,
         dropout: float = 0.1,
     ):
-        """
-        Initialize the Titans MAG model.
-        
-        Args:
-            d_model: Dimension of the model
-            n_layers: Number of layers
-            n_heads: Number of attention heads
-            memory_depth: Depth of the memory MLP
-            persistent_tokens: Number of persistent memory tokens
-            window_size: Size of the sliding window
-            dropout: Dropout probability
-        """
+        """Initialize the Titans MAG model."""
         super().__init__(
             d_model=d_model,
             n_layers=n_layers,
@@ -45,7 +35,7 @@ class TitansMAG(TitansBase):
             dropout=dropout,
         )
         
-        # Sliding window attention layers
+        # Sliding window attention (short-term memory)
         self.attention_layers = nn.ModuleList([
             SlidingWindowAttention(
                 d_model=d_model,
@@ -67,13 +57,13 @@ class TitansMAG(TitansBase):
             for _ in range(n_layers)
         ])
         
-        # Feed-forward networks with improved initialization
+        # Feed-forward networks
         self.ffns = nn.ModuleList([
             self._create_ffn()
             for _ in range(n_layers)
         ])
         
-        # Gate mechanism with improved architecture
+        # Gating mechanism
         self.gate_norm1 = nn.LayerNorm(d_model)
         self.gate_norm2 = nn.LayerNorm(d_model)
         self.gate_proj = nn.Sequential(
@@ -86,11 +76,11 @@ class TitansMAG(TitansBase):
         # Output projection
         self.output_projection = nn.Linear(d_model, d_model)
         
-        # Initialize all weights
+        # Initialize weights
         self.apply(self._init_weights)
         
     def _init_weights(self, module: nn.Module) -> None:
-        """Initialize weights with improved scaling."""
+        """Initialize weights."""
         if isinstance(module, nn.Linear):
             nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
             if module.bias is not None:
@@ -100,7 +90,7 @@ class TitansMAG(TitansBase):
             nn.init.zeros_(module.bias)
             
     def _create_ffn(self) -> nn.Sequential:
-        """Create a feed-forward network with improved architecture."""
+        """Create a feed-forward network."""
         dropout_prob = self.dropout.p if isinstance(self.dropout, nn.Dropout) else self.dropout
         return nn.Sequential(
             nn.Linear(self.d_model, 4 * self.d_model),
@@ -109,59 +99,68 @@ class TitansMAG(TitansBase):
             nn.Linear(4 * self.d_model, self.d_model),
             nn.Dropout(dropout_prob),
         )
-        
+    
     def forward(
         self,
         x: torch.Tensor,
         is_training: bool = True,
     ) -> torch.Tensor:
-        """
-        Forward pass through the Titans MAG model.
+        """Forward pass through the Titans MAG model."""
+        batch_size, seq_len, _ = x.shape
+        device = x.device
         
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            is_training: Whether to update the memory parameters
+        # 1. Process through sliding window attention (short-term memory)
+        if self.persistent_tokens > 0:
+            # Ensure consistent device placement
+            x_with_memory = self.persistent_memory.prepend_to_sequence(x.to(device))
             
-        Returns:
-            Output tensor of shape (batch_size, seq_len, d_model)
-        """
-        batch_size = x.size(0)
-        
-        # Prepend persistent memory tokens
-        x_with_persistent = self.persistent_memory.prepend_to_sequence(x)
-        
-        # Process through attention layers (core branch)
-        core_output = x_with_persistent
-        for i in range(self.n_layers):
-            # Self-attention with residual connection and layer norm
-            residual = core_output
-            core_output = self.layer_norms1[i](core_output)
-            core_output = self.attention_layers[i](core_output)
-            core_output = residual + self.dropout(core_output)
+            # Process with sliding window attention
+            for i in range(self.n_layers):
+                # Self-attention with residual connection and layer norm
+                residual = x_with_memory
+                normalized = self.layer_norms1[i](x_with_memory)
+                attended = self.attention_layers[i](normalized)
+                x_with_memory = residual + self.dropout(attended)
+                
+                # Feed-forward with residual connection and layer norm
+                residual = x_with_memory
+                normalized = self.layer_norms2[i](x_with_memory)
+                ffn_output = self.ffns[i](normalized)
+                x_with_memory = residual + ffn_output
             
-            # Feed-forward with residual connection and layer norm
-            residual = core_output
-            core_output = self.layer_norms2[i](core_output)
-            core_output = self.ffns[i](core_output)
-            core_output = residual + core_output
+            # Extract original sequence part
+            short_term_memory = x_with_memory[:, self.persistent_tokens:, :].to(device)
+        else:
+            # If no persistent tokens, process directly
+            short_term_memory = x.to(device)
+            for i in range(self.n_layers):
+                residual = short_term_memory
+                normalized = self.layer_norms1[i](short_term_memory)
+                attended = self.attention_layers[i](normalized)
+                short_term_memory = residual + self.dropout(attended)
+                
+                residual = short_term_memory
+                normalized = self.layer_norms2[i](short_term_memory)
+                ffn_output = self.ffns[i](normalized)
+                short_term_memory = residual + ffn_output
         
-        # Remove persistent tokens from core output
-        core_output = core_output[:, self.persistent_tokens:, :]
+        # 2. Process through neural memory (long-term memory)
+        long_term_memory, _ = self.neural_memory(x.to(device), is_training=is_training)
         
-        # Process through neural memory (memory branch)
-        memory_output, _ = self.neural_memory(x, is_training=is_training)
+        # Ensure both memories are on the same device
+        short_term_memory = short_term_memory.to(device)
+        long_term_memory = long_term_memory.to(device)
         
-        # Apply gating mechanism with improved stability
-        core_output_norm = self.gate_norm1(core_output)
-        memory_output_norm = self.gate_norm2(memory_output)
+        # 3. Apply gating mechanism to combine memories
+        normalized_short = self.gate_norm1(short_term_memory)
+        normalized_long = self.gate_norm2(long_term_memory)
         
-        # Concatenate and project for gating
-        gate_input = torch.cat([core_output_norm, memory_output_norm], dim=-1)
-        gate = torch.sigmoid(self.gate_proj(gate_input))
+        # Create gate
+        combined = torch.cat([normalized_short, normalized_long], dim=-1)
+        gate = torch.sigmoid(self.gate_proj(combined))
         
-        # Combine outputs with gating and gradient scaling
-        output = gate * core_output + (1 - gate) * memory_output
-        output = output / output.abs().mean().clamp(min=1)
+        # Combine with gate
+        output = gate * short_term_memory + (1 - gate) * long_term_memory
         
         # Final projection
         output = self.output_projection(output)

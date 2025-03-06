@@ -8,9 +8,10 @@ from titans.utils.attention import CausalSelfAttention
 
 class TitansMAC(TitansBase):
     """
-    Titans with Memory as a Context (MAC) as described in the paper.
+    Titans with Memory as Context (MAC) as described in Section 3.1 of the paper.
     
-    In this variant, memory is used as context for the attention mechanism.
+    In this variant, memory is treated as context for the attention mechanism,
+    concatenating [persistent tokens || memory output || current context].
     """
     
     def __init__(
@@ -25,20 +26,7 @@ class TitansMAC(TitansBase):
         chunk_size: int = 128,
         max_parallel_chunks: int = 4,
     ):
-        """
-        Initialize the Titans MAC model.
-        
-        Args:
-            d_model: Dimension of the model
-            n_layers: Number of layers
-            n_heads: Number of attention heads
-            memory_depth: Depth of the memory MLP
-            persistent_tokens: Number of persistent memory tokens
-            window_size: Size of the sliding window (None for full attention)
-            dropout: Dropout probability
-            chunk_size: Size of the chunks for processing
-            max_parallel_chunks: Maximum number of chunks to process in parallel
-        """
+        """Initialize the Titans MAC model."""
         super().__init__(
             d_model=d_model,
             n_layers=n_layers,
@@ -74,7 +62,7 @@ class TitansMAC(TitansBase):
             for _ in range(n_layers)
         ])
         
-        # Feed-forward networks with improved initialization
+        # Feed-forward networks
         self.ffns = nn.ModuleList([
             self._create_ffn()
             for _ in range(n_layers)
@@ -83,11 +71,11 @@ class TitansMAC(TitansBase):
         # Output projection
         self.output_projection = nn.Linear(d_model, d_model)
         
-        # Initialize all weights
+        # Initialize weights
         self.apply(self._init_weights)
         
     def _init_weights(self, module: nn.Module) -> None:
-        """Initialize weights with improved scaling."""
+        """Initialize weights."""
         if isinstance(module, nn.Linear):
             nn.init.xavier_uniform_(module.weight, gain=1/math.sqrt(2))
             if module.bias is not None:
@@ -97,7 +85,7 @@ class TitansMAC(TitansBase):
             nn.init.zeros_(module.bias)
             
     def _create_ffn(self) -> nn.Sequential:
-        """Create a feed-forward network with improved architecture."""
+        """Create a feed-forward network."""
         dropout_prob = self.dropout.p if isinstance(self.dropout, nn.Dropout) else self.dropout
         return nn.Sequential(
             nn.Linear(self.d_model, 4 * self.d_model),
@@ -114,40 +102,36 @@ class TitansMAC(TitansBase):
         persistent_tokens: torch.Tensor,
         is_training: bool,
     ) -> torch.Tensor:
-        """
-        Process a single chunk of the input sequence.
+        """Process a single chunk following the MAC architecture."""
+        device = chunk.device
         
-        Args:
-            chunk: Input chunk tensor
-            memory_query: Memory query tensor
-            persistent_tokens: Persistent memory tokens
-            is_training: Whether in training mode
-            
-        Returns:
-            Processed chunk tensor
-        """
         # Query the memory
         memory_output, _ = self.neural_memory(memory_query, is_training=is_training)
         
-        # Prepend tokens
+        # Ensure all tensors are on the same device
+        persistent_tokens = persistent_tokens.to(device)
+        memory_output = memory_output.to(device)
+        
+        # Concatenate [persistent tokens || memory output || chunk]
         augmented_chunk = torch.cat([persistent_tokens, memory_output, chunk], dim=1)
         
-        # Process through attention layers
+        # Process through transformer layers
         for j in range(self.n_layers):
             # Self-attention with residual connection and layer norm
             residual = augmented_chunk
-            augmented_chunk = self.layer_norms1[j](augmented_chunk)
-            augmented_chunk = self.attention_layers[j](augmented_chunk)
-            augmented_chunk = residual + self.dropout(augmented_chunk)
+            normalized = self.layer_norms1[j](augmented_chunk)
+            attended = self.attention_layers[j](normalized)
+            augmented_chunk = residual + self.dropout(attended)
             
             # Feed-forward with residual connection and layer norm
             residual = augmented_chunk
-            augmented_chunk = self.layer_norms2[j](augmented_chunk)
-            augmented_chunk = self.ffns[j](augmented_chunk)
-            augmented_chunk = residual + augmented_chunk
+            normalized = self.layer_norms2[j](augmented_chunk)
+            ffn_output = self.ffns[j](normalized)
+            augmented_chunk = residual + ffn_output
         
-        # Extract chunk output
-        chunk_output = augmented_chunk[:, self.persistent_tokens + memory_output.size(1):, :]
+        # Extract chunk output (remove persistent and memory tokens)
+        memory_size = persistent_tokens.size(1) + memory_output.size(1)
+        chunk_output = augmented_chunk[:, memory_size:, :]
         
         return chunk_output
         
@@ -158,22 +142,21 @@ class TitansMAC(TitansBase):
         persistent_tokens: torch.Tensor,
         is_training: bool,
     ) -> List[torch.Tensor]:
-        """
-        Process multiple chunks in parallel.
-        
-        Args:
-            chunks: List of input chunk tensors
-            memory_queries: Memory query tensors
-            persistent_tokens: Persistent memory tokens
-            is_training: Whether in training mode
+        """Process multiple chunks in parallel for efficiency."""
+        if not chunks:
+            return []
             
-        Returns:
-            List of processed chunk tensors
-        """
-        # Concatenate chunks for parallel processing
+        device = chunks[0].device
+        
+        # Concatenate chunks
         batched_chunks = torch.cat(chunks, dim=0)
         batched_queries = memory_queries.repeat(len(chunks), 1, 1)
         batched_persistent = persistent_tokens.repeat(len(chunks), 1, 1)
+        
+        # Ensure all tensors are on the same device
+        batched_chunks = batched_chunks.to(device)
+        batched_queries = batched_queries.to(device)
+        batched_persistent = batched_persistent.to(device)
         
         # Process all chunks at once
         batched_output = self._process_chunk(
@@ -192,20 +175,12 @@ class TitansMAC(TitansBase):
         x: torch.Tensor,
         is_training: bool = True,
     ) -> torch.Tensor:
-        """
-        Forward pass through the Titans MAC model with optimized chunk processing.
-        
-        Args:
-            x: Input tensor of shape (batch_size, seq_len, d_model)
-            is_training: Whether to update the memory parameters
-            
-        Returns:
-            Output tensor of shape (batch_size, seq_len, d_model)
-        """
+        """Forward pass through the Titans MAC model."""
         batch_size, seq_len, _ = x.shape
+        device = x.device
         
-        # Get persistent tokens once
-        persistent_tokens = self.persistent_memory.forward(batch_size)
+        # Get persistent tokens and ensure they're on the right device
+        persistent_tokens = self.persistent_memory.forward(batch_size).to(device)
         
         # Process the sequence in chunks
         chunk_outputs = []
@@ -215,10 +190,10 @@ class TitansMAC(TitansBase):
         for i in range(0, seq_len, self.chunk_size):
             # Get current chunk
             end_idx = min(i + self.chunk_size, seq_len)
-            chunk = x[:, i:end_idx, :]
+            chunk = x[:, i:end_idx, :].to(device)
             
-            # Prepare memory query
-            memory_query = chunk.mean(dim=1, keepdim=True)
+            # Prepare memory query (average of chunk)
+            memory_query = chunk.mean(dim=1, keepdim=True).to(device)
             
             # Accumulate chunks for parallel processing
             current_chunks.append(chunk)
@@ -229,14 +204,15 @@ class TitansMAC(TitansBase):
                 # Process chunks in parallel
                 processed_chunks = self._process_chunks_parallel(
                     current_chunks,
-                    torch.cat(current_queries, dim=0),
+                    torch.cat(current_queries, dim=0).to(device),
                     persistent_tokens,
                     is_training,
                 )
                 
-                # Update memory with processed chunks if in training
+                # Update memory with processed chunks if in training mode
                 if is_training:
                     for processed_chunk in processed_chunks:
+                        processed_chunk = processed_chunk.to(device)
                         self.neural_memory(processed_chunk, is_training=True)
                 
                 # Add to outputs
@@ -246,12 +222,15 @@ class TitansMAC(TitansBase):
                 current_chunks = []
                 current_queries = []
         
-        # Concatenate all chunk outputs
-        output = torch.cat(chunk_outputs, dim=1)
-        
-        # Final projection with gradient scaling
-        output = self.output_projection(output)
-        output = output / output.abs().mean().clamp(min=1)
-        
-        return output
+        # Concatenate all chunk outputs and ensure they're on the right device
+        if chunk_outputs:
+            output = torch.cat([chunk.to(device) for chunk in chunk_outputs], dim=1)
+            
+            # Final projection
+            output = self.output_projection(output)
+            
+            return output
+        else:
+            # Handle empty case
+            return torch.zeros(batch_size, 0, self.d_model, device=device)
     
