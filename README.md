@@ -38,7 +38,7 @@ pip install "titans-unofficial[dev]"
 
 ```bash
 # Clone the repository
-git clone https://github.com/Shehryar718/titans-unofficial.git
+git clone https://github.com/itsmesherry/titans-unofficial.git
 cd titans-unofficial
 
 # Install in development mode with all extras
