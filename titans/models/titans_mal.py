@@ -12,6 +12,9 @@ class TitansMAL(TitansBase):
     
     In this variant, memory is used as an additional transformation layer
     in the transformer architecture between attention and feed-forward layers.
+    
+    All layers share one set of memory parameters, but each layer keeps its own
+    memory state, so a layer only ever reads what it stored for earlier tokens.
     """
     
     def __init__(
@@ -23,6 +26,7 @@ class TitansMAL(TitansBase):
         persistent_tokens: int = 16,
         window_size: int = 128,
         dropout: float = 0.1,
+        persist_memory: bool = False,
     ):
         """Initialize the Titans MAL model."""
         super().__init__(
@@ -33,6 +37,7 @@ class TitansMAL(TitansBase):
             persistent_tokens=persistent_tokens,
             window_size=window_size,
             dropout=dropout,
+            persist_memory=persist_memory,
         )
         
         # Sliding window attention
@@ -42,6 +47,7 @@ class TitansMAL(TitansBase):
                 n_heads=n_heads,
                 window_size=window_size,
                 dropout=dropout,
+                global_prefix=persistent_tokens,
             )
             for _ in range(n_layers)
         ])
@@ -99,20 +105,16 @@ class TitansMAL(TitansBase):
         is_training: bool = True,
     ) -> torch.Tensor:
         """Forward pass through the Titans MAL model."""
-        batch_size, seq_len, _ = x.shape
-        device = x.device
-        
-        # Ensure input is on the correct device
-        x = x.to(device)
+        batch_size = x.size(0)
         
         # Add persistent memory tokens if needed
         if self.persistent_tokens > 0:
-            x_with_memory = self.persistent_memory.prepend_to_sequence(x)
+            output = self.persistent_memory.prepend_to_sequence(x)
         else:
-            x_with_memory = x
+            output = x
         
-        # Ensure consistent device placement
-        output = x_with_memory.to(device)
+        # One memory state per layer
+        states = self._begin_memory(batch_size, n_states=self.n_layers)
         
         # Process through transformer layers with memory as a layer
         for i in range(self.n_layers):
@@ -123,11 +125,10 @@ class TitansMAL(TitansBase):
             output = residual + self.dropout(attended)
             
             # 2. Memory layer (unique to MAL architecture)
-            memory_input = self.memory_norm(output).to(device)
-            memory_output, _ = self.neural_memory(memory_input, is_training=is_training)
-            
-            # Ensure memory_output is on the correct device
-            memory_output = memory_output.to(device)
+            memory_input = self.memory_norm(output)
+            memory_output, states[i] = self.neural_memory(
+                memory_input, states[i], is_training=is_training
+            )
             
             # Add memory contribution (residual connection)
             output = output + memory_output
@@ -138,12 +139,13 @@ class TitansMAL(TitansBase):
             ffn_output = self.ffns[i](normalized)
             output = residual + ffn_output
         
+        self._end_memory(states)
+        
         # Remove persistent tokens if they were added
         if self.persistent_tokens > 0:
             output = output[:, self.persistent_tokens:, :]
         
         # Final projection
-        output = self.output_projection(output.to(device))
+        output = self.output_projection(output)
         
-        return output 
-    
+        return output

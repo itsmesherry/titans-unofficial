@@ -2,7 +2,6 @@ import pytest
 import torch
 
 from titans import TitansMAC, TitansMAG, TitansMAL
-from titans.utils.memory import NeuralMemoryModule
 
 D_MODEL = 32
 
@@ -40,18 +39,12 @@ def test_mac_default_chunk_size_long_sequence():
 def test_mac_later_chunks_read_earlier_chunks():
     """Changing the first chunk changes the output for the second chunk, through memory."""
     model = make_model(TitansMAC).eval()
-    state = {k: v.clone() for k, v in model.state_dict().items()}
     x = torch.randn(1, 16, D_MODEL)
     x_changed = x.clone()
     x_changed[:, :8] = torch.randn(1, 8, D_MODEL)
 
     with torch.no_grad():
-        second_chunk = model(x)[:, 8:]
-        model.load_state_dict(state)
-        model.neural_memory.surprise_momentum = None
-        second_chunk_changed = model(x_changed)[:, 8:]
-
-    assert not torch.allclose(second_chunk, second_chunk_changed)
+        assert not torch.allclose(model(x)[:, 8:], model(x_changed)[:, 8:])
 
 
 @pytest.mark.parametrize("model_class", [TitansMAC, TitansMAG, TitansMAL])
@@ -65,18 +58,116 @@ def test_backward(model_class):
     assert model.persistent_memory.memory_tokens.grad.abs().sum() > 0
 
 
-def test_first_memory_update_goes_to_the_right_layers():
-    """Each memory layer is updated with its own gradient, including on the first step."""
-    memory = NeuralMemoryModule(D_MODEL, memory_depth=2)
-    before = [layer.weight.data.clone() for layer in memory.memory_layers]
-    x = torch.randn(1, D_MODEL)
-    gradients = memory.compute_gradient(memory.W_K(x), memory.W_V(x))
-    theta, eta, alpha = torch.tensor([[0.5]]), torch.tensor([[0.0]]), torch.tensor([[0.0]])
+@pytest.mark.parametrize("model_class", [TitansMAC, TitansMAG, TitansMAL])
+@pytest.mark.parametrize("is_training", [True, False])
+def test_causal(model_class, is_training):
+    """Changing later tokens never changes the output at earlier positions."""
+    model = make_model(model_class).eval()
+    x = torch.randn(2, 20, D_MODEL)
+    x_changed = x.clone()
+    x_changed[:, 11:] = torch.randn(2, 9, D_MODEL)
 
-    memory.update_memory(x, theta, eta, alpha)
+    with torch.no_grad():
+        output = model(x, is_training=is_training)
+        output_changed = model(x_changed, is_training=is_training)
 
-    for layer, weight, (weight_grad, _) in zip(memory.memory_layers, before, gradients):
-        assert torch.allclose(layer.weight.data, weight - 0.5 * weight_grad, atol=1e-6)
+    assert torch.allclose(output[:, :11], output_changed[:, :11], atol=1e-6)
+    assert not torch.allclose(output[:, 11:], output_changed[:, 11:])
+
+
+@pytest.mark.parametrize("model_class", [TitansMAC, TitansMAG, TitansMAL])
+def test_calls_and_batch_mates_do_not_affect_each_other(model_class):
+    """By default every call starts from the learned memory, one memory per sequence."""
+    model = make_model(model_class).eval()
+    a, b = torch.randn(1, 20, D_MODEL), torch.randn(1, 20, D_MODEL)
+
+    with torch.no_grad():
+        alone = model(a)
+        batched = model(torch.cat([a, b]))[:1]
+        again = model(a)
+
+    assert torch.equal(alone, again)
+    assert torch.allclose(alone, batched, atol=1e-5)
+
+
+@pytest.mark.parametrize("model_class", [TitansMAC, TitansMAG, TitansMAL])
+def test_persist_memory(model_class):
+    """With persist_memory the memory carries over between calls until it is reset."""
+    model = make_model(model_class, persist_memory=True).eval()
+    x = torch.randn(2, 20, D_MODEL)
+
+    with torch.no_grad():
+        first = model(x)
+        second = model(x)
+        model.reset_memory()
+        after_reset = model(x)
+
+    assert not torch.allclose(first, second, atol=1e-4)
+    assert torch.equal(first, after_reset)
+
+
+def test_mac_pieces_with_persist_memory_equal_one_call():
+    """Feeding a long input chunk by chunk gives the same result as feeding it at once."""
+    model = make_model(TitansMAC, persist_memory=True).eval()
+    x = torch.randn(2, 24, D_MODEL)
+
+    with torch.no_grad():
+        whole = model(x)
+        model.reset_memory()
+        pieces = torch.cat([model(x[:, :8]), model(x[:, 8:16]), model(x[:, 16:])], dim=1)
+
+    assert torch.allclose(whole, pieces, atol=1e-6)
+
+
+def test_persist_memory_rejects_a_new_batch_size():
+    model = make_model(TitansMAG, persist_memory=True)
+    model(torch.randn(2, 8, D_MODEL))
+
+    with pytest.raises(ValueError, match="reset_memory"):
+        model(torch.randn(3, 8, D_MODEL))
+
+
+@pytest.mark.parametrize("model_class", [TitansMAC, TitansMAG, TitansMAL])
+@pytest.mark.parametrize("persist_memory", [False, True])
+def test_training_steps(model_class, persist_memory):
+    """Several optimizer steps run, and every parameter receives a gradient."""
+    model = make_model(model_class, persist_memory=persist_memory)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+
+    for _ in range(2):
+        optimizer.zero_grad()
+        model(torch.randn(2, 20, D_MODEL)).pow(2).mean().backward()
+        optimizer.step()
+
+    for name, param in model.named_parameters():
+        if persist_memory and "memory_layers" in name:
+            continue  # the learned starting point is only used right after a reset
+        assert param.grad is not None and param.grad.abs().sum() > 0, name
+
+
+def test_forward_does_not_change_the_weights():
+    """Test-time learning happens in the memory state, not in the model's parameters."""
+    model = make_model(TitansMAL, persist_memory=True).eval()
+    before = {name: value.clone() for name, value in model.state_dict().items()}
+
+    with torch.no_grad():
+        model(torch.randn(2, 20, D_MODEL))
+
+    for name, value in model.state_dict().items():
+        assert torch.equal(value, before[name])
+
+
+@pytest.mark.parametrize("model_class", [TitansMAG, TitansMAL])
+def test_persistent_tokens_visible_beyond_the_window(model_class):
+    """Positions past the attention window still depend on the persistent tokens."""
+    model = model_class(
+        d_model=D_MODEL, n_layers=1, n_heads=4, persistent_tokens=4, window_size=8
+    ).eval()
+
+    output = model(torch.randn(1, 30, D_MODEL), is_training=False)
+    (grad,) = torch.autograd.grad(output[0, 25].sum(), model.persistent_memory.memory_tokens)
+
+    assert grad.abs().sum() > 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

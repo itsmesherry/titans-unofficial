@@ -23,6 +23,7 @@ class TitansMAG(TitansBase):
         persistent_tokens: int = 16,
         window_size: int = 128,
         dropout: float = 0.1,
+        persist_memory: bool = False,
     ):
         """Initialize the Titans MAG model."""
         super().__init__(
@@ -33,6 +34,7 @@ class TitansMAG(TitansBase):
             persistent_tokens=persistent_tokens,
             window_size=window_size,
             dropout=dropout,
+            persist_memory=persist_memory,
         )
         
         # Sliding window attention (short-term memory)
@@ -42,6 +44,7 @@ class TitansMAG(TitansBase):
                 n_heads=n_heads,
                 window_size=window_size,
                 dropout=dropout,
+                global_prefix=persistent_tokens,
             )
             for _ in range(n_layers)
         ])
@@ -106,50 +109,34 @@ class TitansMAG(TitansBase):
         is_training: bool = True,
     ) -> torch.Tensor:
         """Forward pass through the Titans MAG model."""
-        batch_size, seq_len, _ = x.shape
-        device = x.device
+        batch_size = x.size(0)
         
-        # 1. Process through sliding window attention (short-term memory)
+        # 1. Process through sliding window attention (short-term memory).
+        # Persistent tokens are prepended and stay visible from every position
+        short_term_memory = x
         if self.persistent_tokens > 0:
-            # Ensure consistent device placement
-            x_with_memory = self.persistent_memory.prepend_to_sequence(x.to(device))
+            short_term_memory = self.persistent_memory.prepend_to_sequence(x)
+        
+        for i in range(self.n_layers):
+            # Self-attention with residual connection and layer norm
+            residual = short_term_memory
+            normalized = self.layer_norms1[i](short_term_memory)
+            attended = self.attention_layers[i](normalized)
+            short_term_memory = residual + self.dropout(attended)
             
-            # Process with sliding window attention
-            for i in range(self.n_layers):
-                # Self-attention with residual connection and layer norm
-                residual = x_with_memory
-                normalized = self.layer_norms1[i](x_with_memory)
-                attended = self.attention_layers[i](normalized)
-                x_with_memory = residual + self.dropout(attended)
-                
-                # Feed-forward with residual connection and layer norm
-                residual = x_with_memory
-                normalized = self.layer_norms2[i](x_with_memory)
-                ffn_output = self.ffns[i](normalized)
-                x_with_memory = residual + ffn_output
-            
-            # Extract original sequence part
-            short_term_memory = x_with_memory[:, self.persistent_tokens:, :].to(device)
-        else:
-            # If no persistent tokens, process directly
-            short_term_memory = x.to(device)
-            for i in range(self.n_layers):
-                residual = short_term_memory
-                normalized = self.layer_norms1[i](short_term_memory)
-                attended = self.attention_layers[i](normalized)
-                short_term_memory = residual + self.dropout(attended)
-                
-                residual = short_term_memory
-                normalized = self.layer_norms2[i](short_term_memory)
-                ffn_output = self.ffns[i](normalized)
-                short_term_memory = residual + ffn_output
+            # Feed-forward with residual connection and layer norm
+            residual = short_term_memory
+            normalized = self.layer_norms2[i](short_term_memory)
+            ffn_output = self.ffns[i](normalized)
+            short_term_memory = residual + ffn_output
+        
+        # Extract original sequence part
+        short_term_memory = short_term_memory[:, self.persistent_tokens:, :]
         
         # 2. Process through neural memory (long-term memory)
-        long_term_memory, _ = self.neural_memory(x.to(device), is_training=is_training)
-        
-        # Ensure both memories are on the same device
-        short_term_memory = short_term_memory.to(device)
-        long_term_memory = long_term_memory.to(device)
+        (state,) = self._begin_memory(batch_size)
+        long_term_memory, state = self.neural_memory(x, state, is_training=is_training)
+        self._end_memory([state])
         
         # 3. Apply gating mechanism to combine memories
         normalized_short = self.gate_norm1(short_term_memory)

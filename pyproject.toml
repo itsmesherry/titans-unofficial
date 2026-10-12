@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    {name = "Shehryar Sohail", email = "hafizshehryar88@gmail.com"}
+    {name = "Shehryar Sohail", email = "sherryyatwork@gmail.com"}
 ]
 keywords = ["titans", "pytorch", "transformer", "neural-memory", "test-time-learning", "attention"]
 classifiers = [

@@ -56,52 +56,74 @@ mag = TitansMAG(d_model=128, n_layers=2, n_heads=4, window_size=128)
 mal = TitansMAL(d_model=128, n_layers=2, n_heads=4, window_size=128)
 ```
 
-| Argument            | Default | Meaning                                               |
-| ------------------- | ------- | ----------------------------------------------------- |
-| `d_model`           |         | Width of the input and output embeddings              |
-| `n_layers`          |         | Number of attention blocks                            |
-| `n_heads`           |         | Attention heads; must divide `d_model`                |
-| `memory_depth`      | 2       | Layers in the memory network                          |
-| `persistent_tokens` | 16      | Learned, input-independent tokens prepended to input  |
-| `window_size`       | 128     | Attention window (MAG, MAL); off by default in MAC    |
-| `chunk_size`        | 128     | Tokens per chunk (MAC only)                           |
-| `dropout`           | 0.1     | Dropout rate                                          |
+| Argument            | Default | Meaning                                                |
+| ------------------- | ------- | ------------------------------------------------------ |
+| `d_model`           |         | Width of the input and output embeddings               |
+| `n_layers`          |         | Number of attention blocks                             |
+| `n_heads`           |         | Attention heads; must divide `d_model`                 |
+| `memory_depth`      | 2       | Layers in the memory network                           |
+| `persistent_tokens` | 16      | Learned, input-independent tokens prepended to input   |
+| `window_size`       | 128     | Attention window (MAG, MAL); off by default in MAC     |
+| `chunk_size`        | 128     | Tokens per chunk (MAC only)                            |
+| `dropout`           | 0.1     | Dropout rate                                           |
+| `persist_memory`    | False   | Carry the memory over from one `forward` call to the next |
+
+All three variants are causal: the output at a position depends only on that
+position and the ones before it, so they can be trained as language models.
 
 ## Working with the memory
 
-The memory is state that lives on the model and changes during `forward`.
+Every sequence in a batch gets its own memory. It starts from weights the model
+has learned, is updated token by token as the sequence is read, and is thrown
+away when `forward` returns. Calls are therefore independent: the same input
+always gives the same output, and the model's parameters never change at
+inference time.
 
 ```python
-y = model(x)                     # reads from memory and writes to it
-y = model(x, is_training=False)  # reads only; the memory stays as it is
-
-model.reset_memory()             # forget everything, e.g. between documents
-model.to_device("cuda")          # move the model together with its memory
+y = model(x)                     # each sequence reads from and writes to its own memory
+y = model(x, is_training=False)  # reads only: the memory stays at its learned starting point
 ```
 
 `is_training` controls the memory only and is independent of `model.train()` and
 `model.eval()`, which still switch dropout as usual. Leave it on at inference
 time if you want the test-time learning the paper is about.
 
+To feed one long input in several calls, keep the memory between them:
+
+```python
+model = TitansMAC(d_model=128, n_layers=2, n_heads=4, persist_memory=True)
+
+for piece in pieces_of_a_long_document:  # each of shape (batch, tokens, d_model)
+    y = model(piece)                     # remembers the earlier pieces
+
+model.reset_memory()                     # before the next document or a new batch size
+```
+
+The memory updates are differentiable, so training with an ordinary optimizer
+also trains the memory's starting weights, its key, value and query projections,
+and the gates that set its learning rate, momentum and forgetting.
+
 ## Differences from the paper
 
-This is an alpha-stage reimplementation, and it departs from the paper in ways
-that matter if you plan to reproduce its results:
+This is an alpha-stage reimplementation. It follows the paper's equations for
+the memory (Section 3.1) and its three architectures (Section 4), with these
+departures:
 
-- One memory is shared by the whole batch and persists across `forward` calls,
-  so outputs depend on batch composition and call order. Use a batch size of 1
-  and call `reset_memory()` between sequences for clean behaviour.
-- `reset_memory()` draws new random memory weights; it does not return to a
-  learned starting point, so results after a reset are not reproducible without
-  fixing the random seed.
-- The memory's key and value projections and its learning-rate, momentum and
-  forgetting gates are not trained; they keep their initial values.
-- In MAG and MAL, persistent tokens drop out of the attention window for
-  positions beyond `window_size`.
-- MAC queries the memory with the average of a chunk, giving one recalled token
-  per chunk.
+- The gradient the memory learns from is clipped to a norm of 1 per sequence.
+  Without it the updates diverge on inputs of ordinary scale. Pass
+  `max_grad_norm=None` to `NeuralMemoryModule` to turn it off.
+- The forgetting gate is shifted so that an untrained memory keeps about 98% of
+  its weights per token.
+- The memory is written one token at a time. The chunked, parallel training of
+  Section 3.2 is not implemented, so long sequences are slow.
+- MAC keeps the model causal by letting a token see what the memory recalled
+  for itself and for earlier tokens only.
+- MAL shares one set of memory parameters between its layers, each with its own
+  memory state, and places the memory after attention in each block.
+- The depthwise-separable convolutions and SiLU activations of Section 4.4 are
+  not used.
 
-These are tracked in the [roadmap](https://github.com/itsmesherry/titans-unofficial/blob/main/TODO.md).
+No results from the paper have been reproduced with this code.
 
 ## Examples
 
