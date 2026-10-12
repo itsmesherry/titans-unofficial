@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.2] - 2026-10-12
+## [1.1.4] - 2026-10-12
+
+Versions 1.1.1 to 1.1.3 exist only as git tags from 2025 and were never
+published to PyPI.
 
 ### Added
 
 - GPU support: models and their memory state stay on one device, and
-  `to_device()` moves a model together with its memory. This was tagged as
-  1.1.1 but never published to PyPI.
+  `to_device()` moves a model together with its memory.
 - `titans.__version__`.
 
 ### Fixed
@@ -36,6 +38,6 @@ Last version published before this changelog was started. See the
 [GitHub releases](https://github.com/itsmesherry/titans-unofficial/releases)
 for earlier history.
 
-[Unreleased]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.2...HEAD
-[1.1.2]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.0...v1.1.2
+[Unreleased]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.4...HEAD
+[1.1.4]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.0...v1.1.4
 [1.1.0]: https://github.com/itsmesherry/titans-unofficial/releases/tag/v1.1.0
