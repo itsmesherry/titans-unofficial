@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-12
+
 A rework of the neural memory. Model outputs change, so models trained with 1.x
 need retraining; their checkpoints still load.
 
@@ -78,6 +80,7 @@ Last version published before this changelog was started. See the
 [GitHub releases](https://github.com/itsmesherry/titans-unofficial/releases)
 for earlier history.
 
-[Unreleased]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.4...HEAD
+[Unreleased]: https://github.com/itsmesherry/titans-unofficial/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.4...v2.0.0
 [1.1.4]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.0...v1.1.4
 [1.1.0]: https://github.com/itsmesherry/titans-unofficial/releases/tag/v1.1.0
