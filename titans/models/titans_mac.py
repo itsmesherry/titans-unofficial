@@ -5,6 +5,7 @@ import math
 
 from titans.models.titans_base import TitansBase
 from titans.utils.attention import CausalSelfAttention
+from titans.utils.memory import MemoryState
 
 class TitansMAC(TitansBase):
     """
@@ -12,6 +13,12 @@ class TitansMAC(TitansBase):
     
     In this variant, memory is treated as context for the attention mechanism,
     concatenating [persistent tokens || memory output || current context].
+    
+    The sequence is processed in chunks. For each chunk, every token queries the
+    memory as it stood after the previous chunks, and the chunk's output is then
+    written to memory. A token attends to the persistent tokens, to what the
+    memory recalled for itself and for earlier tokens, and to earlier tokens,
+    so the model is causal.
     """
     
     def __init__(
@@ -25,6 +32,7 @@ class TitansMAC(TitansBase):
         dropout: float = 0.1,
         chunk_size: int = 128,
         max_parallel_chunks: int = 4,
+        persist_memory: bool = False,
     ):
         """
         Initialize the Titans MAC model.
@@ -40,6 +48,7 @@ class TitansMAC(TitansBase):
             persistent_tokens=persistent_tokens,
             window_size=window_size,
             dropout=dropout,
+            persist_memory=persist_memory,
         )
         
         self.chunk_size = chunk_size
@@ -100,32 +109,42 @@ class TitansMAC(TitansBase):
             nn.Dropout(dropout_prob),
         )
         
+    def _context_mask(self, n_persistent: int, chunk_len: int, device: torch.device) -> torch.Tensor:
+        """
+        Attention mask for [persistent tokens || memory output || chunk].
+        
+        Causal, with one extra restriction: memory token j was recalled using
+        chunk token j, so chunk token i may only see memory tokens j <= i.
+        """
+        total = n_persistent + 2 * chunk_len
+        mask = torch.tril(torch.ones(total, total, dtype=torch.bool, device=device))
+        
+        chunk_start = n_persistent + chunk_len
+        mask[chunk_start:, n_persistent:chunk_start] = torch.tril(
+            torch.ones(chunk_len, chunk_len, dtype=torch.bool, device=device)
+        )
+        return mask
+        
     def _process_chunk(
         self,
         chunk: torch.Tensor,
-        memory_query: torch.Tensor,
+        state: MemoryState,
         persistent_tokens: torch.Tensor,
-        is_training: bool,
     ) -> torch.Tensor:
         """Process a single chunk following the MAC architecture."""
-        device = chunk.device
-        
-        # Query the memory
-        memory_output, _ = self.neural_memory(memory_query, is_training=is_training)
-        
-        # Ensure all tensors are on the same device
-        persistent_tokens = persistent_tokens.to(device)
-        memory_output = memory_output.to(device)
+        # Query the memory with every token of the chunk, without updating it
+        memory_output = self.neural_memory.retrieve(chunk, state)
         
         # Concatenate [persistent tokens || memory output || chunk]
         augmented_chunk = torch.cat([persistent_tokens, memory_output, chunk], dim=1)
+        mask = self._context_mask(persistent_tokens.size(1), chunk.size(1), chunk.device)
         
         # Process through transformer layers
         for j in range(self.n_layers):
             # Self-attention with residual connection and layer norm
             residual = augmented_chunk
             normalized = self.layer_norms1[j](augmented_chunk)
-            attended = self.attention_layers[j](normalized)
+            attended = self.attention_layers[j].attention(normalized, normalized, normalized, mask)
             augmented_chunk = residual + self.dropout(attended)
             
             # Feed-forward with residual connection and layer norm
@@ -139,7 +158,7 @@ class TitansMAC(TitansBase):
         chunk_output = augmented_chunk[:, memory_size:, :]
         
         return chunk_output
-        
+    
     def forward(
         self,
         x: torch.Tensor,
@@ -149,8 +168,8 @@ class TitansMAC(TitansBase):
         batch_size, seq_len, _ = x.shape
         device = x.device
         
-        # Get persistent tokens and ensure they're on the right device
-        persistent_tokens = self.persistent_memory.forward(batch_size).to(device)
+        persistent_tokens = self.persistent_memory(batch_size)
+        (state,) = self._begin_memory(batch_size)
         
         # Process the sequence chunk by chunk, in order: each chunk reads what
         # the earlier chunks wrote to memory
@@ -160,21 +179,15 @@ class TitansMAC(TitansBase):
             # Get current chunk (the last one may be shorter)
             chunk = x[:, i:i + self.chunk_size, :]
             
-            # Prepare memory query (average of chunk)
-            memory_query = chunk.mean(dim=1, keepdim=True)
-            
-            processed_chunk = self._process_chunk(
-                chunk,
-                memory_query,
-                persistent_tokens,
-                is_training,
-            )
+            processed_chunk = self._process_chunk(chunk, state, persistent_tokens)
             
             # Update memory with the processed chunk if in training mode
             if is_training:
-                self.neural_memory(processed_chunk, is_training=True)
+                state = self.neural_memory.update(processed_chunk, state)
             
             chunk_outputs.append(processed_chunk)
+        
+        self._end_memory([state])
         
         if chunk_outputs:
             output = torch.cat(chunk_outputs, dim=1)

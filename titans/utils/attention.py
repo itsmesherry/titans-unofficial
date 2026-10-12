@@ -17,8 +17,14 @@ class MultiHeadAttention(nn.Module):
         window_size: Optional[int] = None,
         dropout: float = 0.1,
         attention_scale: float = 1.0,
+        global_prefix: int = 0,
     ):
-        """Initialize the multi-head attention."""
+        """
+        Initialize the multi-head attention.
+        
+        global_prefix is the number of leading tokens (the persistent memory)
+        that stay visible from every position when a sliding window is used.
+        """
         super().__init__()
         
         assert d_model % n_heads == 0, "d_model must be divisible by n_heads"
@@ -28,6 +34,7 @@ class MultiHeadAttention(nn.Module):
         self.d_head = d_model // n_heads
         self.window_size = window_size
         self.attention_scale = attention_scale
+        self.global_prefix = global_prefix
         
         # Projection matrices
         self.W_Q = nn.Linear(d_model, d_model, bias=False)
@@ -80,6 +87,9 @@ class MultiHeadAttention(nn.Module):
             window_mask = self.create_sliding_window_mask(
                 q.size(2), k.size(2), self.window_size, device=device
             )
+            # Prefix tokens stay visible to every later position
+            prefix = self.global_prefix
+            window_mask[:, :prefix] = torch.tril(torch.ones_like(window_mask))[:, :prefix]
             if mask is not None:
                 mask = mask.to(device) & window_mask
             else:
@@ -134,6 +144,7 @@ class SlidingWindowAttention(nn.Module):
         n_heads: int,
         window_size: int,
         dropout: float = 0.1,
+        global_prefix: int = 0,
     ):
         """Initialize the sliding window attention."""
         super().__init__()
@@ -143,6 +154,7 @@ class SlidingWindowAttention(nn.Module):
             n_heads=n_heads,
             window_size=window_size,
             dropout=dropout,
+            global_prefix=global_prefix,
         )
         
     def forward(

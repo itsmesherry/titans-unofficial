@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A rework of the neural memory. Model outputs change, so models trained with 1.x
+need retraining; their checkpoints still load.
+
+### Fixed
+
+- `TitansMAC` and multi-layer `TitansMAL` let later tokens influence the output
+  at earlier positions, which made them unusable as language models. All three
+  variants are now causal.
+- Every sequence in a batch has its own memory. Before, the batch shared one, so
+  an output depended on the other sequences in the batch.
+- The memory's key and value projections and its learning-rate, momentum and
+  forgetting gates now receive gradients and can be trained.
+- Persistent tokens stay visible beyond the attention window in `TitansMAG` and
+  `TitansMAL`.
+
+### Changed
+
+- Each `forward` call starts from the learned memory and leaves the model's
+  parameters untouched, so the same input always gives the same output. To carry
+  the memory across calls as before, construct the model with
+  `persist_memory=True`.
+- `reset_memory()` clears carried-over memory instead of drawing new random
+  weights.
+- `TitansMAC` queries the memory with every token of a chunk, not the chunk's
+  average, and reading the memory no longer writes to it.
+- Keys and queries are L2-normalized and the memory loss is the squared L2 norm,
+  as in the paper. The memory's gradient is clipped to norm 1 per sequence
+  (`max_grad_norm`).
+- An untrained forgetting gate now keeps about 98% of the memory per token; it
+  used to keep about half.
+- `NeuralMemoryModule` no longer holds the memory. `forward(x, state=None,
+  is_training=True)` returns `(outputs, state)`, and `init_state`, `retrieve` and
+  `update` are the public operations. `reset_memory`, `memory_forward`,
+  `compute_loss`, `compute_gradient` and `update_memory` are removed.
+
+### Added
+
+- `persist_memory` argument on all three models.
+- `global_prefix` argument on `MultiHeadAttention` and `SlidingWindowAttention`.
+
 ## [1.1.4] - 2026-10-12
 
 Versions 1.1.1 to 1.1.3 exist only as git tags from 2025 and were never
