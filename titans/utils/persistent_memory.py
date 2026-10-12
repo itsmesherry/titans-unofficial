@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class PersistentMemory(nn.Module):
     """
-    Persistent Memory module as described in Section 2.3 of the paper.
+    Persistent Memory module as described in Section 3.3 of the paper.
     
     Provides learnable but data-independent parameters to store task knowledge.
     """
@@ -28,9 +28,6 @@ class PersistentMemory(nn.Module):
         
     def forward(self, batch_size: int) -> torch.Tensor:
         """Return persistent memory tokens expanded to batch size."""
-        # Get the device of the memory tokens
-        device = self.memory_tokens.device
-        
         # Expand for batch dimension
         return self.memory_tokens.expand(batch_size, -1, -1)
     

@@ -13,10 +13,18 @@ Each variant represents a different approach to incorporating neural memory
 into transformer-based architectures.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .models.titans_base import TitansBase
 from .models.titans_mac import TitansMAC
 from .models.titans_mag import TitansMAG
 from .models.titans_mal import TitansMAL
+
+# The version lives in pyproject.toml only
+try:
+    __version__ = version("titans-unofficial")
+except PackageNotFoundError:  # source tree that has not been installed
+    __version__ = "0.0.0"
 
 __all__ = [
     'TitansBase',

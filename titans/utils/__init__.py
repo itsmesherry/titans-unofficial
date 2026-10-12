@@ -3,7 +3,7 @@ Utility modules for the Titans architecture.
 
 This package contains the core components needed to implement the Titans architecture:
 
-- NeuralMemoryModule: Implements the long-term memory described in Section 2.1,
+- NeuralMemoryModule: Implements the long-term memory described in Section 3.1,
   which learns to memorize at test time using gradient descent with momentum and
   weight decay.
 
@@ -15,7 +15,7 @@ This package contains the core components needed to implement the Titans archite
 - CausalSelfAttention: Causal attention used primarily in the MAC (Memory as Context)
   variant, where the current token can only attend to itself and previous tokens.
 
-- PersistentMemory: Implements the persistent memory described in Section 2.3,
+- PersistentMemory: Implements the persistent memory described in Section 3.3,
   which provides learnable but data-independent parameters to store task knowledge.
 """
 

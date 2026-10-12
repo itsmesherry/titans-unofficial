@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 
 from typing import Optional
@@ -34,10 +33,10 @@ class TitansBase(nn.Module):
         self.persistent_tokens = persistent_tokens
         self.window_size = window_size
         
-        # Persistent memory from Section 2.3
+        # Persistent memory from Section 3.3
         self.persistent_memory = PersistentMemory(d_model, persistent_tokens)
         
-        # Neural memory module from Section 2.1
+        # Neural memory module from Section 3.1
         self.neural_memory = NeuralMemoryModule(
             d_model=d_model,
             memory_depth=memory_depth,

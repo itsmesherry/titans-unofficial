@@ -1,191 +1,131 @@
-# Unofficial Implementation of Titans: Learning to Memorize at Test Time
+<h1 align="center">titans-unofficial</h1>
 
-[![PyPI version](https://img.shields.io/pypi/v/titans-unofficial.svg)](https://pypi.org/project/titans-unofficial/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  An unofficial PyTorch implementation of<br>
+  <a href="https://arxiv.org/abs/2501.00663">Titans: Learning to Memorize at Test Time</a>
+  (Behrouz, Zhong and Mirrokni).
+</p>
 
-This is an unofficial PyTorch implementation of the paper ["Titans: Learning to Memorize at Test Time"](https://arxiv.org/abs/2501.00663) by Ali Behrouz, Peilin Zhong, and Vahab Mirrokni.
+<p align="center">
+  <a href="https://pypi.org/project/titans-unofficial/"><img alt="PyPI" src="https://img.shields.io/pypi/v/titans-unofficial"></a>
+  <a href="https://github.com/itsmesherry/titans-unofficial/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/itsmesherry/titans-unofficial/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/titans-unofficial/"><img alt="Python" src="https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue"></a>
+  <a href="https://pypi.org/project/titans-unofficial/"><img alt="Downloads" src="https://img.shields.io/pypi/dm/titans-unofficial"></a>
+  <a href="https://github.com/itsmesherry/titans-unofficial/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
-## Overview
-
-Titans is a novel neural architecture that combines attention-based short-term memory with a neural long-term memory module. The architecture addresses the limitations of both recurrent models (which compress data into fixed-size memory) and attention mechanisms (which have quadratic complexity).
-
-### Key Features
-
-- **Neural Long-term Memory**: A module that learns to memorize historical context
-- **Persistent Memory**: Learnable tokens that encode task-specific knowledge
-- **Three Architectural Variants**:
-  - MAC (Memory as Context): Uses memory as context for attention
-  - MAG (Memory as Gate): Combines memory with core branch using gating
-  - MAL (Memory as Layer): Integrates memory as a separate layer
-
-## Installation
-
-### From PyPI (Recommended)
+Titans pairs attention, which acts as short-term memory, with a small neural
+network that serves as long-term memory. That network keeps learning while the
+model reads: it is updated by gradient descent on each token, with momentum and
+a forgetting term, at inference time as well as during training.
 
 ```bash
-# Install core package (minimal dependencies)
 pip install titans-unofficial
-
-# Install with examples dependencies (for running example scripts)
-pip install "titans-unofficial[examples]"
-
-# Install with development dependencies (for contributing)
-pip install "titans-unofficial[dev]"
 ```
 
-### From Source (Development)
+```python
+import torch
+from titans import TitansMAC
+
+model = TitansMAC(d_model=128, n_layers=2, n_heads=4)
+
+x = torch.randn(2, 300, 128)  # (batch, sequence, d_model)
+y = model(x)                  # same shape; the memory learns as it reads
+```
+
+The models work on embeddings, not token IDs, so they slot in where a
+transformer encoder stack would go. Add your own embedding layer and output
+head; the [examples](#examples) show how.
+
+## Variants
+
+The paper describes three ways to connect the memory to attention. All three
+share the same constructor arguments and the same `forward(x, is_training=True)`.
+
+| Class       | Paper | How the memory is used                                                     |
+| ----------- | ----- | -------------------------------------------------------------------------- |
+| `TitansMAC` | §4.1  | Memory as context: what the memory recalls is prepended to each chunk      |
+| `TitansMAG` | §4.2  | Memory as gate: a learned gate mixes sliding-window attention with memory  |
+| `TitansMAL` | §4.3  | Memory as layer: every block runs attention, then memory, then the MLP     |
+
+```python
+from titans import TitansMAC, TitansMAG, TitansMAL
+
+mac = TitansMAC(d_model=128, n_layers=2, n_heads=4, chunk_size=128)
+mag = TitansMAG(d_model=128, n_layers=2, n_heads=4, window_size=128)
+mal = TitansMAL(d_model=128, n_layers=2, n_heads=4, window_size=128)
+```
+
+| Argument            | Default | Meaning                                               |
+| ------------------- | ------- | ----------------------------------------------------- |
+| `d_model`           |         | Width of the input and output embeddings              |
+| `n_layers`          |         | Number of attention blocks                            |
+| `n_heads`           |         | Attention heads; must divide `d_model`                |
+| `memory_depth`      | 2       | Layers in the memory network                          |
+| `persistent_tokens` | 16      | Learned, input-independent tokens prepended to input  |
+| `window_size`       | 128     | Attention window (MAG, MAL); off by default in MAC    |
+| `chunk_size`        | 128     | Tokens per chunk (MAC only)                           |
+| `dropout`           | 0.1     | Dropout rate                                          |
+
+## Working with the memory
+
+The memory is state that lives on the model and changes during `forward`.
+
+```python
+y = model(x)                     # reads from memory and writes to it
+y = model(x, is_training=False)  # reads only; the memory stays as it is
+
+model.reset_memory()             # forget everything, e.g. between documents
+model.to_device("cuda")          # move the model together with its memory
+```
+
+`is_training` controls the memory only and is independent of `model.train()` and
+`model.eval()`, which still switch dropout as usual. Leave it on at inference
+time if you want the test-time learning the paper is about.
+
+## Differences from the paper
+
+This is an alpha-stage reimplementation, and it departs from the paper in ways
+that matter if you plan to reproduce its results:
+
+- One memory is shared by the whole batch and persists across `forward` calls,
+  so outputs depend on batch composition and call order. Use a batch size of 1
+  and call `reset_memory()` between sequences for clean behaviour.
+- `reset_memory()` draws new random memory weights; it does not return to a
+  learned starting point, so results after a reset are not reproducible without
+  fixing the random seed.
+- The memory's key and value projections and its learning-rate, momentum and
+  forgetting gates are not trained; they keep their initial values.
+- In MAG and MAL, persistent tokens drop out of the attention window for
+  positions beyond `window_size`.
+- MAC queries the memory with the average of a chunk, giving one recalled token
+  per chunk.
+
+These are tracked in the [roadmap](https://github.com/itsmesherry/titans-unofficial/blob/main/TODO.md).
+
+## Examples
+
+The example scripts are not part of the installed package. Run them from a clone:
 
 ```bash
-# Clone the repository
 git clone https://github.com/itsmesherry/titans-unofficial.git
 cd titans-unofficial
-
-# Install in development mode with all extras
-pip install -e ".[dev,examples]"
+pip install -e ".[examples]"
+cd examples
+python simple_example.py
 ```
 
-## Project Structure
-
-```
-titans-unofficial/
-├── titans/
-│   ├── __init__.py
-│   ├── models/
-│   │   ├── titans_base.py    # Base class for all variants
-│   │   ├── titans_mac.py     # Memory as Context implementation
-│   │   ├── titans_mag.py     # Memory as Gate implementation
-│   │   └── titans_mal.py     # Memory as Layer implementation
-│   └── utils/
-│       ├── memory.py         # Neural Memory Module
-│       ├── attention.py      # Attention mechanisms
-│       └── persistent_memory.py  # Persistent Memory implementation
-├── examples/
-│   ├── text_classification.py  # Text classification example
-│   ├── language_modeling.py    # Language modeling example
-│   └── fine_tuning.py         # Fine-tuning example
-├── pytests/
-│   └── test_memory.py         # Tests for memory module
-├── requirements.txt
-├── LICENSE
-└── README.md
-```
-
-## Usage
-
-### Text Classification
-
-```python
-from titans import TitansMAC, TitansMAG, TitansMAL
-from examples.text_classification import TitansForClassification
-
-# Initialize model
-model = TitansForClassification(
-    vocab_size=30000,
-    d_model=128,
-    n_layers=2,
-    n_heads=4,
-    num_classes=2,
-    memory_depth=2,
-    persistent_tokens=8,
-    window_size=16,
-    model_type="mal"  # Choose from: "mac", "mag", "mal"
-)
-```
-
-```bash
-# Train and evaluate
-python examples/text_classification.py
-```
-
-### Language Modeling
-
-```python
-from titans import TitansMAC, TitansMAG, TitansMAL
-from examples.language_modeling import TitansForLanguageModeling
-
-# Initialize model
-model = TitansForLanguageModeling(
-    vocab_size=30000,
-    d_model=128,
-    n_layers=2,
-    n_heads=4,
-    memory_depth=2,
-    persistent_tokens=16,
-    window_size=128,
-    model_type="mac"
-)
-```
-
-```bash
-# Train and generate text
-python examples/fine_tuning.py
-```
-
-## Architecture Details
-
-### Neural Memory Module
-
-The neural memory module consists of:
-
-- Key/Value/Query projections for memory access
-- Multi-layer perceptron for memory processing
-- Momentum-based update mechanism with configurable parameters
-- Weight decay for forgetting mechanism
-- Gradient scaling for numerical stability
-
-### Variants
-
-1. **MAC (Memory as Context)**
-
-   - Memory output serves as additional context
-   - Efficient for tasks requiring long-range dependencies
-   - Parallel processing with chunked computation
-   - Configurable chunk size and parallel processing
-
-2. **MAG (Memory as Gate)**
-
-   - Gating mechanism to combine memory with core processing
-   - Adaptive balance between short and long-term memory
-   - Enhanced numerical stability
-   - Improved gradient flow through gating
-
-3. **MAL (Memory as Layer)**
-   - Memory integrated as a separate layer
-   - Direct memory access at each layer
-   - Sliding window attention for efficiency
-   - Layer-wise memory updates
-
-## Example Tasks
-
-The repository includes implementations for:
-
-- Text Classification (Binary and multi-class)
-- Language Modeling with test-time adaptation
-- Fine-tuning with early stopping
-
-Each example demonstrates different aspects of the Titans architecture:
-
-- Memory reset between epochs for fresh adaptation
-- Efficient batch processing with dynamic batching
-- Gradient scaling for numerical stability
-- Early stopping and model checkpointing
-- Proper memory state management
-
-## Testing
-
-```bash
-# Run all tests
-pytest pytests/
-
-# Run specific test file
-pytest pytests/test_memory.py
-```
+| Script                   | What it shows                                                  |
+| ------------------------ | -------------------------------------------------------------- |
+| `simple_example.py`      | A forward pass through each variant                            |
+| `language_modeling.py`   | A language model with token embeddings and text generation     |
+| `text_classification.py` | A classifier head, with a training and evaluation loop         |
+| `fine_tuning.py`         | A longer training loop with evaluation and sample generation   |
 
 ## Citation
 
-This repository provides an **unofficial implementation** of the Titans architecture.  
-If you reference this work, please **cite the original paper**:
+This repository is not affiliated with the authors. If you use it, cite the
+paper:
 
 ```bibtex
 @article{behrouz2024titans,
@@ -196,10 +136,6 @@ If you reference this work, please **cite the original paper**:
 }
 ```
 
-## License
+## Project
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+[Changelog](https://github.com/itsmesherry/titans-unofficial/blob/main/CHANGELOG.md) · [Contributing](https://github.com/itsmesherry/titans-unofficial/blob/main/CONTRIBUTING.md) · [Roadmap](https://github.com/itsmesherry/titans-unofficial/blob/main/TODO.md) · [MIT License](https://github.com/itsmesherry/titans-unofficial/blob/main/LICENSE)

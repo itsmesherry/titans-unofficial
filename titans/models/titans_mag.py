@@ -8,7 +8,7 @@ from titans.utils.attention import SlidingWindowAttention
 
 class TitansMAG(TitansBase):
     """
-    Titans with Memory as Gating (MAG) as described in Section 3.2 of the paper.
+    Titans with Memory as Gating (MAG) as described in Section 4.2 of the paper.
     
     Uses sliding window attention as short-term memory and neural memory as
     long-term memory, combining them with a gating mechanism.

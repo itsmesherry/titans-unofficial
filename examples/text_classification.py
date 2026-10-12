@@ -6,8 +6,7 @@ import sys
 import os
 import numpy as np
 import time
-import random
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple, Optional
 from torch.utils.data import Dataset, DataLoader
 
 # Add the parent directory to the path
@@ -17,7 +16,6 @@ from titans import TitansMAC, TitansMAG, TitansMAL
 
 # Import SimpleTokenizer directly from the file
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from language_modeling import SimpleTokenizer
 
 
 class TitansForClassification(nn.Module):
