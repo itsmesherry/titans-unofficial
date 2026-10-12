@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-12
+
 ### Added
 
 - GPU support: models and their memory state stay on one device, and
@@ -34,5 +36,6 @@ Last version published before this changelog was started. See the
 [GitHub releases](https://github.com/itsmesherry/titans-unofficial/releases)
 for earlier history.
 
-[Unreleased]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/itsmesherry/titans-unofficial/compare/v1.1.0...v1.1.2
 [1.1.0]: https://github.com/itsmesherry/titans-unofficial/releases/tag/v1.1.0
