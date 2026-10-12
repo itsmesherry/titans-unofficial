@@ -8,7 +8,7 @@ from titans.utils.attention import CausalSelfAttention
 
 class TitansMAC(TitansBase):
     """
-    Titans with Memory as Context (MAC) as described in Section 3.1 of the paper.
+    Titans with Memory as Context (MAC) as described in Section 4.1 of the paper.
     
     In this variant, memory is treated as context for the attention mechanism,
     concatenating [persistent tokens || memory output || current context].

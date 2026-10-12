@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class PersistentMemory(nn.Module):
     """
-    Persistent Memory module as described in Section 2.3 of the paper.
+    Persistent Memory module as described in Section 3.3 of the paper.
     
     Provides learnable but data-independent parameters to store task knowledge.
     """

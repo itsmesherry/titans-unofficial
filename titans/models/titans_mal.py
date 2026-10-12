@@ -8,7 +8,7 @@ from titans.utils.attention import SlidingWindowAttention
 
 class TitansMAL(TitansBase):
     """
-    Titans with Memory as Layer (MAL) as described in Section 3.3 of the paper.
+    Titans with Memory as Layer (MAL) as described in Section 4.3 of the paper.
     
     In this variant, memory is used as an additional transformation layer
     in the transformer architecture between attention and feed-forward layers.

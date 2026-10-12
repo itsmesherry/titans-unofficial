@@ -9,7 +9,7 @@ class NeuralMemoryModule(nn.Module):
     """
     Neural Memory Module that learns to memorize at test time.
     
-    Implements equations from Section 2.1 of the paper, using gradient descent
+    Implements equations from Section 3.1 of the paper, using gradient descent
     with momentum and weight decay to update memory parameters during inference.
     """
     
