@@ -169,8 +169,6 @@ class TitansForLanguageModeling(nn.Module):
         Returns:
             Generated token IDs of shape (batch_size, max_length)
         """
-        batch_size = input_ids.shape[0]
-        device = input_ids.device
         
         # Initialize generated sequence with input_ids
         generated = input_ids.clone()

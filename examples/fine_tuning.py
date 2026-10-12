@@ -496,7 +496,7 @@ def main():
             try:
                 prompt = "The Titans"
                 generated = generate_sample(model, tokenizer, prompt, device=device)
-                print(f"\nSample generation:")
+                print("\nSample generation:")
                 print(f"Prompt: {prompt}")
                 print(f"Generated: {generated}")
                 print()

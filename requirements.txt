@@ -1,6 +1,0 @@
-torch
-numpy
-transformers
-einops
-pytest
-pytest-asyncio

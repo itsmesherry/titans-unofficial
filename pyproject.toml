@@ -1,31 +1,63 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "titans-unofficial"
+version = "1.1.1"
+description = "Unofficial PyTorch implementation of Titans: Learning to Memorize at Test Time"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Shehryar Sohail", email = "hafizshehryar88@gmail.com"}
+]
+keywords = ["titans", "pytorch", "transformer", "neural-memory", "test-time-learning", "attention"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "ruff>=0.10.0",
+    "build>=1.0.0",
+    "twine>=5.0.0",
+]
+examples = [
+    "numpy",
+    "transformers",
+]
+
+[project.urls]
+Homepage = "https://github.com/itsmesherry/titans-unofficial"
+Repository = "https://github.com/itsmesherry/titans-unofficial"
+Changelog = "https://github.com/itsmesherry/titans-unofficial/blob/main/CHANGELOG.md"
+Issues = "https://github.com/itsmesherry/titans-unofficial/issues"
+Paper = "https://arxiv.org/abs/2501.00663"
+
+[tool.setuptools.packages.find]
+include = ["titans*"]
 
 [tool.pytest.ini_options]
 testpaths = ["pytests"]
-python_files = ["test_*.py"]
 addopts = "-ra -q"
-asyncio_mode = "strict"
-asyncio_default_fixture_loop_scope = "function"
 
-[tool.black]
+[tool.ruff]
 line-length = 100
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+target-version = "py310"
 
-[tool.isort]
-profile = "black"
-multi_line_output = 3 
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
