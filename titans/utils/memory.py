@@ -156,10 +156,10 @@ class NeuralMemoryModule(nn.Module):
             # Initialize momentum if not exists
             if self.surprise_momentum is None:
                 self.surprise_momentum = []
-                for layer in self.memory_layers:
+                for memory_layer in self.memory_layers:
                     # Create momentum buffers on the same device as the model
-                    weight_momentum = torch.zeros_like(layer.weight, device=device)
-                    bias_momentum = torch.zeros_like(layer.bias, device=device) if layer.bias is not None else None
+                    weight_momentum = torch.zeros_like(memory_layer.weight, device=device)
+                    bias_momentum = torch.zeros_like(memory_layer.bias, device=device) if memory_layer.bias is not None else None
                     self.surprise_momentum.append((weight_momentum, bias_momentum))
             
             # Update momentum (S_t in equation 4)
